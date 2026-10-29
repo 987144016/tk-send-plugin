@@ -17,8 +17,6 @@ button.tiny{padding:6px 10px;margin:0 4px 0 0;font-size:13px}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7faf9;padding:12px;border-radius:8px}
 code{background:#eef3f1;padding:2px 6px;border-radius:4px}
 .warn{color:#8a3b12;background:#fff4e8;padding:10px 12px;border-radius:8px;margin:0 0 16px}
-#update-banner button{margin:8px 8px 0 0}
-#update-banner.okish{color:#0f4a3a;background:#e7f8ee;border:1px solid #9fd5b5}
 .hint{font-size:12px;color:#5a7269;margin-top:3px}
 .row{margin-top:8px}
 .round-panel{background:#eef7f3;border:1px solid #c5d5cf;border-radius:10px;padding:14px 16px;margin:8px 0 16px;line-height:1.7}
@@ -46,7 +44,7 @@ input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf
 </head>
 <body>
 <main>
-<div id="update-banner" class="warn" style="display:none" role="status"></div>
+<p class="hint" id="update-hint">队列启动时会自动 <code>git pull</code>（仅 git clone）。拉代码后请到 <code>chrome://extensions</code> <strong>重新加载</strong>本扩展，否则新 JS 不会生效。手动兜底：包根目录 <code>Update-SendPlugin.ps1</code>。</p>
 <h1>TK Send Plugin · Gmail Web（多账号）</h1>
 <p class="warn">一点即运行。发信 = Gmail <strong>网页点击</strong>。禁止 Gmail API / 远程调试 / 新开 Chrome。<strong>不要工作台、识别码、配对码</strong>。每邮箱只用<strong>自己的</strong>模板；禁止跨号。<strong>一人多号：每个 Gmail 标签页各自登录一个账号，扩展只领本页签登录号的任务，不再点头像切号</strong>；多个页签按顺序发。「立即发送（按Y人密送一封测发）」对每个剩余>0的账号入队<strong>1封密送</strong>，密送栏一次粘贴Y个邮箱（Y=「一次发多少人」；剩余=0跳过）。每个号发完先写飞书，再扫同号收件箱（含垃圾/可疑邮件）回写回复时间。<strong>节奏设置：「一次发多少人」= 这一批最多发几个人，发满就停，隔「批次间隔」分钟再发下一批；填 0 = 暂时禁用本号（不入队/立即发送跳过）</strong>。禁止一次性群发全部。</p>
 

@@ -2,7 +2,8 @@
 """Chrome Native Messaging host: start/status/stop send-plugin local queue (8767).
 
 Message format: 4-byte little-endian length + UTF-8 JSON.
-Commands: ping | status | start | stop | version | check_update | apply_update
+Commands: ping | status | start | stop | version | pull
+On start/ensure: best-effort git pull --ff-only when ROOT is a git clone.
 """
 from __future__ import annotations
 
@@ -74,11 +75,21 @@ def _pick_pythonw() -> str:
 
 
 def start_queue() -> dict:
+    """Best-effort git pull (if clone), then ensure local queue is running."""
+    if (ROOT / ".git").exists():
+        pull_info = _run_git_pull()
+        log(
+            "git pull on start ok=%s local=%s err=%s"
+            % (pull_info.get("ok"), pull_info.get("local") or "", pull_info.get("error") or "")
+        )
+    else:
+        pull_info = {"ok": True, "skipped": True, "reason": "not_git_clone"}
+
     h = health()
     if h and h.get("ok"):
-        return {"ok": True, "already": True, "running": True, "health": h}
+        return {"ok": True, "already": True, "running": True, "health": h, "pull": pull_info}
     if not QUEUE_PY.is_file():
-        return {"ok": False, "error": f"missing {QUEUE_PY}"}
+        return {"ok": False, "error": f"missing {QUEUE_PY}", "pull": pull_info}
     creation = 0
     if os.name == "nt":
         creation = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
@@ -91,18 +102,19 @@ def start_queue() -> dict:
             cwd=str(ROOT),
             stdout=stdout,
             stderr=stderr,
-            creationflags=creation if os.name == "nt" else 0,
-            close_fds=True,
+            creationflags=creation if creation else 0,
+            close_fds=False,
         )
     except Exception as e:
         log("start fail: " + str(e))
-        return {"ok": False, "error": str(e)}
-    for _ in range(40):  # ~10s
+        return {"ok": False, "error": str(e), "pull": pull_info}
+    for _ in range(40):
         time.sleep(0.25)
         h = health()
         if h and h.get("ok"):
-            return {"ok": True, "started": True, "running": True, "health": h}
-    return {"ok": False, "error": "queue started but health not ready", "running": False}
+            return {"ok": True, "started": True, "running": True, "health": h, "pull": pull_info}
+    return {"ok": False, "error": "queue started but health not ready", "running": False, "pull": pull_info}
+
 
 
 def stop_queue() -> dict:
@@ -122,100 +134,15 @@ def stop_queue() -> dict:
 
 
 
-REPO_SLUG = "987144016/tk-send-plugin"
-REMOTE_VERSION_URL = f"https://raw.githubusercontent.com/{REPO_SLUG}/main/VERSION"
-ZIP_URL = f"https://github.com/{REPO_SLUG}/archive/refs/heads/main.zip"
-RELEASES_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
-
-
 def read_local_version() -> str:
-    p = ROOT / "VERSION"
     try:
-        if p.is_file():
-            return p.read_text(encoding="utf-8").strip()
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     except Exception:
-        pass
-    return ""
-
-
-def _http_get(url: str, timeout: float = 15.0) -> bytes:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "tk-send-plugin-updater",
-            "Accept": "application/vnd.github+json, text/plain, */*",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-
-def fetch_remote_version() -> dict:
-    """Prefer raw VERSION on main; fall back to latest release tag."""
-    err = None
-    try:
-        raw = _http_get(REMOTE_VERSION_URL, timeout=12).decode("utf-8", errors="replace").strip()
-        if raw:
-            return {"ok": True, "remote": raw, "source": "branch_VERSION"}
-    except Exception as e:
-        err = str(e)
-    try:
-        data = json.loads(_http_get(RELEASES_API, timeout=12).decode("utf-8"))
-        tag = (data.get("tag_name") or "").strip()
-        if tag:
-            return {"ok": True, "remote": tag.lstrip("vV"), "source": "release_tag", "tag": tag}
-    except Exception as e:
-        err = (err + "; " if err else "") + str(e)
-    return {"ok": False, "error": err or "remote version unavailable"}
-
-
-def _ver_tuple(s: str):
-    s = (s or "").strip().lstrip("vV")
-    core, _, suffix = s.partition("-")
-    parts = []
-    for bit in core.split("."):
-        try:
-            parts.append(int(bit))
-        except ValueError:
-            parts.append(0)
-    while len(parts) < 3:
-        parts.append(0)
-    return (tuple(parts[:4]), suffix)
-
-
-def version_is_newer(remote: str, local: str) -> bool:
-    if not remote:
-        return False
-    if not local:
-        return True
-    rt, rs = _ver_tuple(remote)
-    lt, ls = _ver_tuple(local)
-    if rt != lt:
-        return rt > lt
-    # Same numeric core: not newer (avoids bounce-label vs bare thrash)
-    return False
-
-
-def check_update() -> dict:
-    local = read_local_version()
-    rem = fetch_remote_version()
-    if not rem.get("ok"):
-        return {"ok": False, "local": local, "error": rem.get("error")}
-    remote = rem["remote"]
-    newer = version_is_newer(remote, local)
-    return {
-        "ok": True,
-        "local": local,
-        "remote": remote,
-        "newer": newer,
-        "source": rem.get("source"),
-        "tag": rem.get("tag"),
-        "root": str(ROOT),
-        "is_git": (ROOT / ".git").exists(),
-    }
+        return ""
 
 
 def _run_git_pull() -> dict:
+    """Best-effort ff-only pull. Never raises."""
     try:
         r = subprocess.run(
             ["git", "pull", "--ff-only"],
@@ -235,106 +162,30 @@ def _run_git_pull() -> dict:
     return {"ok": True, "method": "git_pull", "output": out, "local": read_local_version()}
 
 
-def _safe_extract_zip(zip_path: Path) -> dict:
-    import zipfile
-    import shutil
-    import tempfile
-
-    preserve_rel = {
-        "config/one-mailbox.json",
-        "config/multi-accounts.json",
-        ".env",
-    }
-    skip_prefixes = ("data/", "backup-before-")
-
-    with tempfile.TemporaryDirectory(prefix="tk-send-upd-") as td:
-        td_path = Path(td)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(td_path)
-        kids = [p for p in td_path.iterdir() if p.is_dir()]
-        src_root = kids[0] if len(kids) == 1 else td_path
-        copied = 0
-        for src in src_root.rglob("*"):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(src_root).as_posix()
-            if rel.startswith(skip_prefixes) or rel in preserve_rel:
-                continue
-            if rel.startswith("config/") and rel.endswith(".json") and not rel.endswith(".example.json"):
-                if (ROOT / rel).is_file():
-                    continue
-            dest = ROOT / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            copied += 1
-    return {"ok": True, "method": "zip_overlay", "copied": copied, "local": read_local_version()}
-
-
-def apply_update() -> dict:
+def pull_update() -> dict:
+    """Manual/native pull. Git clone only; zip overlay removed for simplicity."""
     before = read_local_version()
-    chk = check_update()
-    if not chk.get("ok"):
-        return chk
-    if not chk.get("newer"):
-        return {
-            "ok": True,
-            "updated": False,
-            "reason": "already_latest",
-            "local": before,
-            "remote": chk.get("remote"),
-        }
-
-    if (ROOT / ".git").exists():
-        result = _run_git_pull()
-        if not result.get("ok"):
-            return result
-        after = read_local_version()
-        return {
-            "ok": True,
-            "updated": True,
-            "method": "git_pull",
-            "before": before,
-            "after": after,
-            "remote": chk.get("remote"),
-            "output": result.get("output"),
-            "reload_extension": True,
-        }
-
-    try:
-        import tempfile
-
-        raw = _http_get(ZIP_URL, timeout=60)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-            tf.write(raw)
-            zpath = Path(tf.name)
-        try:
-            result = _safe_extract_zip(zpath)
-        finally:
-            try:
-                zpath.unlink()
-            except Exception:
-                pass
-        if not result.get("ok"):
-            return result
-        after = read_local_version()
-        return {
-            "ok": True,
-            "updated": True,
-            "method": "zip_overlay",
-            "before": before,
-            "after": after,
-            "remote": chk.get("remote"),
-            "copied": result.get("copied"),
-            "reload_extension": True,
-        }
-    except Exception as e:
-        log("apply_update zip fail: " + str(e))
+    if not (ROOT / ".git").exists():
         return {
             "ok": False,
-            "error": str(e),
-            "hint": "git clone the public repo or run Update-SendPlugin.ps1",
+            "error": "not_git_clone",
+            "hint": "git clone https://github.com/987144016/tk-send-plugin.git or run Update-SendPlugin.ps1",
+            "before": before,
         }
-
+    result = _run_git_pull()
+    if not result.get("ok"):
+        return result
+    after = read_local_version()
+    return {
+        "ok": True,
+        "updated": before != after,
+        "method": "git_pull",
+        "before": before,
+        "after": after,
+        "output": result.get("output"),
+        "reload_extension": True,
+        "hint": "open chrome://extensions and Reload this extension — new JS will not apply until reload",
+    }
 
 
 def main() -> int:
@@ -361,10 +212,8 @@ def main() -> int:
                 write_msg(start_queue())
             elif cmd == "stop":
                 write_msg(stop_queue())
-            elif cmd in ("check_update", "check-update"):
-                write_msg(check_update())
-            elif cmd in ("apply_update", "update", "pull"):
-                write_msg(apply_update())
+            elif cmd in ("pull", "update", "apply_update", "check_update", "check-update"):
+                write_msg(pull_update())
             else:
                 write_msg({"ok": False, "error": "unknown cmd: " + cmd})
         except Exception as e:

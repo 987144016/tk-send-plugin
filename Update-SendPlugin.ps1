@@ -1,6 +1,6 @@
 # Update-SendPlugin.ps1 — manual fallback updater for TK Send Plugin
-# Prefer auto-update (extension checks GitHub VERSION and pulls via Native Host).
-# Use this script only when auto-update is unavailable.
+# Prefer: starting the local queue auto-runs git pull --ff-only (see scripts/Try-GitPullOnStart.ps1).
+# Use this script as a manual fallback, then reload the extension.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Root
@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root ".git"))) {
   Write-Host "First-time install (recommended):"
   Write-Host "  git clone https://github.com/987144016/tk-send-plugin.git `"$Root`""
   Write-Host "Or clone elsewhere and load that clone's extension\ in chrome://extensions."
-  Write-Host "Then re-run this script, or rely on extension auto-update."
+  Write-Host "Then re-run this script, or start the queue once (auto pull)."
   exit 2
 }
 

@@ -36,12 +36,18 @@
 版本见根目录 `VERSION`（当前 0.3.5-bounce-label）。
 
 
-## 更新（优先自动）
+## 更新（队列启动时自动拉取）
 
 公开仓库：https://github.com/987144016/tk-send-plugin
 
-1. **自动更新（默认）**：扩展启动后及每隔约 6 小时会检查 GitHub `main` 分支上的 `VERSION`（失败时再看最新 Release）。若远程更新，且本机是 git clone，Native Host 会执行 `git pull --ff-only`；非 git 安装则尝试下载 zip 覆盖（保留 `data/` 与本地 `config/*.json`）。成功后请在 `chrome://extensions` **重新加载**本扩展（空闲时扩展会尝试 `runtime.reload()`）。
-2. **手动兜底**：双击包根目录 `Update-SendPlugin.ps1`（`git pull --ff-only` → 打印 VERSION → 提示重新加载）。首次若还没有 clone：`git clone https://github.com/987144016/tk-send-plugin.git`。
+1. **自动更新（默认）**：本机是 **git clone** 时，每次**启动本地队列**都会先执行 `git pull --ff-only`：
+   - 双击 `一点即运行-发信插件.cmd`
+   - Options「连接并启动」/ Native Messaging `ensure`（会走 host 的 start）
+   - `scripts/Start-LocalQueue.ps1` / `Start-LocalQueue-Hidden.ps1`
+2. **拉完代码 ≠ 扩展已更新**：Chrome 未打包扩展**不会**自动热替换 JS。请打开 `chrome://extensions`，对本扩展点 **「重新加载」**，否则新前端逻辑不会生效。队列进程若已在跑，Python 侧改动也需再启一次队列才会加载新代码。
+3. **手动兜底**：双击包根目录 `Update-SendPlugin.ps1`（同样 `git pull --ff-only` → 打印 VERSION → 提示重新加载）。首次若还没有 clone：`git clone https://github.com/987144016/tk-send-plugin.git`。
 
-同事一句话更新：有网时等自动更新并 reload；不行就跑 `Update-SendPlugin.ps1` 再 reload。
+同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
+
+版本见根目录 `VERSION`（当前 0.3.7-queue-start-pull）。
 

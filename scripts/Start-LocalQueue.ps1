@@ -4,6 +4,8 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
+# Auto-update (simple): git pull --ff-only when this is a clone; never blocks start
+& "$Root\scripts\Try-GitPullOnStart.ps1" | Out-Host
 Write-Host "send-plugin root: $Root"
 $CfgPath = Join-Path $Root "config\one-mailbox.json"
 if (Test-Path -LiteralPath $CfgPath) {

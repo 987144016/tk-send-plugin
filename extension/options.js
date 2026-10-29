@@ -813,51 +813,6 @@ el('pause').onclick = async () => {
 };
 
 
-async function renderUpdateBanner() {
-  const box = el('update-banner');
-  if (!box) return;
-  let st = null;
-  try { st = await chrome.runtime.sendMessage({type: 'get_update_state'}); } catch {}
-  if (!st) {
-    try {
-      const s = await chrome.storage.local.get('updateState');
-      st = s.updateState;
-    } catch {}
-  }
-  if (!st) { box.style.display = 'none'; return; }
-  if (st.needsReload || st.updated) {
-    box.style.display = 'block';
-    box.className = 'warn okish';
-    box.innerHTML = '已自动更新到 <strong>' + (st.after || st.remote || '') +
-      '</strong>（原 ' + (st.local || '') + '）。请打开 <code>chrome://extensions</code> 点击本扩展「重新加载」。' +
-      '<div><button type="button" id="btn-check-update" class="secondary">再检查更新</button></div>';
-  } else if (st.available) {
-    box.style.display = 'block';
-    box.className = 'warn';
-    box.innerHTML = '发现新版本 <strong>' + (st.remote || '') +
-      '</strong>（当前 ' + (st.local || '') + '）。优先自动更新；若失败请双击包根目录 <code>Update-SendPlugin.ps1</code>，然后重新加载扩展。' +
-      (st.applyError ? ('<div class="hint">自动更新：' + String(st.applyError) + '</div>') : '') +
-      '<div><button type="button" id="btn-check-update">立即检查并更新</button></div>';
-  } else if (st.ok === false && st.error) {
-    box.style.display = 'none';
-  } else {
-    box.style.display = 'none';
-  }
-  const b = el('btn-check-update');
-  if (b) b.onclick = async () => {
-    showToast('正在检查更新…', 'info', 4000);
-    try {
-      const r = await chrome.runtime.sendMessage({type: 'check_update', force: true});
-      await renderUpdateBanner();
-      if (r && r.updated) showToast('已更新到 ' + (r.after || r.remote) + '，请重新加载扩展', 'ok', 12000);
-      else if (r && r.available) showToast('有新版本 ' + r.remote + '，请看上方提示', 'info', 8000);
-      else if (r && r.ok) showToast('已是最新：' + (r.local || r.remote || ''), 'ok', 6000);
-      else showToast('检查失败：' + (r && r.error || 'unknown'), 'err', 8000);
-    } catch (e) {
-      showToast('检查失败：' + e.message, 'err', 8000);
-    }
-  };
-}
 
 
 async function boot() {
@@ -898,4 +853,3 @@ async function boot() {
 
 boot();
 setInterval(refresh, POLL_MS);
-setInterval(() => { renderUpdateBanner().catch(() => {}); }, Math.max(POLL_MS, 15000));
