@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.5",
-  "description": "Standalone Gmail web click-send. v0.3.5: Feishu 发送状态 split 退信 vs 可疑拦截 (inbox_scan classifier); keeps v0.3.4 BCC batch / multi-tab / permit-by-mailbox; auto-update checks public GitHub VERSION.",
+  "version": "0.3.6",
+  "description": "Standalone Gmail web click-send. v0.3.6: Y=0 temporarily disables an account (no enqueue/claim); keeps v0.3.5 bounce-label + v0.3.4 BCC/multi-tab.",
   "permissions": [
     "storage",
     "alarms",

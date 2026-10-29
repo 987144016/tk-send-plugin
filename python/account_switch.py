@@ -41,7 +41,13 @@ def active_index(cfg: dict) -> int:
 
 
 def should_switch(remaining_unsent: int, sent_in_round: int, batch_size: int) -> bool:
-    """True when current account finished its round batch or has nothing left."""
+    """True when current account finished its round batch or has nothing left.
+
+    batch_size<=0 (Y=0 temporarily disabled) always rotates away so a disabled
+    active mailbox does not block finish_then_next.
+    """
+    if batch_size is not None and int(batch_size) <= 0:
+        return True
     if remaining_unsent <= 0:
         return True
     if batch_size > 0 and sent_in_round >= batch_size:
@@ -49,12 +55,41 @@ def should_switch(remaining_unsent: int, sent_in_round: int, batch_size: int) ->
     return False
 
 
+def _account_batch_y(account: dict) -> int:
+    """Read Y=pace.max_messages_per_window; keep explicit 0."""
+    pace = account.get("pace") if isinstance(account.get("pace"), dict) else {}
+    if "max_messages_per_window" in pace and pace.get("max_messages_per_window") is not None and pace.get("max_messages_per_window") != "":
+        try:
+            return int(pace.get("max_messages_per_window"))
+        except Exception:
+            return 15
+    if "batch_size" in pace and pace.get("batch_size") is not None and pace.get("batch_size") != "":
+        try:
+            return int(pace.get("batch_size"))
+        except Exception:
+            return 15
+    if account.get("batch_size") is not None and account.get("batch_size") != "":
+        try:
+            return int(account.get("batch_size"))
+        except Exception:
+            return 15
+    return 15
+
+
 def next_account(cfg: dict) -> dict | None:
+    """Next mailbox for finish_then_next; skip Y=0 (temporarily disabled) accounts."""
     accounts = list_accounts(cfg)
+    if not accounts:
+        return None
     if len(accounts) < 2:
-        return accounts[0] if accounts else None
+        return accounts[0]
     i = active_index(cfg)
-    return accounts[(i + 1) % len(accounts)]
+    n = len(accounts)
+    for step in range(1, n + 1):
+        cand = accounts[(i + step) % n]
+        if _account_batch_y(cand) > 0:
+            return cand
+    return None  # all accounts Y=0
 
 
 def find_account(cfg: dict, mailbox: str) -> dict | None:

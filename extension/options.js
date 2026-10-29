@@ -100,7 +100,7 @@ function readAccountsFromDom() {
     feishu_table_name: (node.querySelector('.f-table-name').value || '').trim(),
     feishu_table_id: (node.querySelector('.f-table-id').value || '').trim(),
     window_minutes: Math.max(1, parseInt(node.querySelector('.f-x').value, 10) || 30),
-    batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? n : 15; })(),
+    batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? Math.max(0, n) : 15; })(),
   }));
 }
 
@@ -161,7 +161,7 @@ function renderAccounts() {
         <div>
           <label>一次发多少人（上限）</label>
           <input class="f-y" type="number" min="0" max="100" value="${a.batch_size}">
-          <div class="hint">发满这个人数就停，等下个批次再发；不是一次性群发全部。<strong>0=暂时禁用本号</strong>（不入队定时、立即发送也跳过）</div>
+          <div class="hint">0 = 暂时禁用本号，不入队不发；发满这个人数就停，等下个批次再发；不是一次性群发全部</div>
         </div>
         <div>
           <label>批次间隔（分钟）</label>
@@ -307,17 +307,31 @@ async function saveSettings({requireQueue = false} = {}) {
   return {settings, queueNote};
 }
 
+function numAllowZero(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function applyServerAccounts(settings) {
   const list = settings.accounts || [];
   if (!list.length) return;
-  accounts = list.map(a => ({
-    mailbox: normalizeMailbox(a.mailbox),
-    template_name: (a.template_name || '').trim(),
-    feishu_table_name: (a.feishu_table_name || '').trim(),
-    feishu_table_id: (a.feishu_table_id || '').trim(),
-    window_minutes: Number((a.pace && a.pace.window_minutes) || a.window_minutes || 30),
-    batch_size: Number((a.pace && a.pace.max_messages_per_window) || a.batch_size || 15),
-  }));
+  accounts = list.map(a => {
+    const pace = (a && a.pace && typeof a.pace === 'object') ? a.pace : {};
+    const yRaw = (pace.max_messages_per_window != null && pace.max_messages_per_window !== '')
+      ? pace.max_messages_per_window
+      : a.batch_size;
+    const xRaw = (pace.window_minutes != null && pace.window_minutes !== '')
+      ? pace.window_minutes
+      : a.window_minutes;
+    return {
+      mailbox: normalizeMailbox(a.mailbox),
+      template_name: (a.template_name || '').trim(),
+      feishu_table_name: (a.feishu_table_name || '').trim(),
+      feishu_table_id: (a.feishu_table_id || '').trim(),
+      window_minutes: Math.max(1, numAllowZero(xRaw, 30)),
+      batch_size: Math.max(0, numAllowZero(yRaw, 15)),
+    };
+  });
   activeMailbox = normalizeMailbox(settings.active_mailbox || settings.mailbox) || accounts[0].mailbox;
   renderAccounts();
 }
@@ -407,11 +421,14 @@ async function applyRoundPayload(j) {
     } else {
       sched.innerHTML = rows.map(row => {
         const badge = row.is_active ? '<span class="badge">当前发件号</span>' : '';
-        const etaLine = paused || row.paused
-          ? '已暂停'
-          : ((row.next_round_eta_human || '')
-            + (row.next_round_eta ? ((row.next_round_eta_human ? ' · ' : '') + row.next_round_eta) : '')
-            + (!row.next_round_eta_human && row.next_round_eta_label ? (' · ' + row.next_round_eta_label) : ''));
+        const yOff = !!(row.y_disabled || (row.pace && Number(row.pace.max_messages_per_window) === 0));
+        const etaLine = yOff
+          ? '已禁用（Y=0）'
+          : (paused || row.paused
+            ? '已暂停'
+            : ((row.next_round_eta_human || '')
+              + (row.next_round_eta ? ((row.next_round_eta_human ? ' · ' : '') + row.next_round_eta) : '')
+              + (!row.next_round_eta_human && row.next_round_eta_label ? (' · ' + row.next_round_eta_label) : '')));
         const remLine = (row.feishu_error && row.remaining_unsent == null)
           ? ('读取失败：' + row.feishu_error)
           : (String(row.remaining_unsent ?? '—') + (row.remaining_stale ? '（缓存）' : ''));
@@ -419,8 +436,8 @@ async function applyRoundPayload(j) {
           + '<div class="who">' + escapeAttr(row.mailbox || '') + ' ' + badge + '</div>'
           + '<div>模板：' + escapeAttr(row.template_name || '') + '</div>'
           + '<div>下一批：<strong>' + escapeAttr(etaLine || '—') + '</strong></div>'
-          + '<div>下一批最多：<strong>' + (paused || row.paused ? '已暂停' : String(row.next_round_count ?? 0)) + ' 人</strong>'
-          + ((!paused && !row.paused && row.next_round_count_note) ? ('（' + escapeAttr(row.next_round_count_note) + '）') : '') + '</div>'
+          + '<div>下一批最多：<strong>' + (yOff ? '已禁用/Y=0' : (paused || row.paused ? '已暂停' : String(row.next_round_count ?? 0))) + (yOff ? '' : ' 人') + '</strong>'
+          + (((yOff || (!paused && !row.paused)) && row.next_round_count_note) ? ('（' + escapeAttr(row.next_round_count_note) + '）') : '') + '</div>'
           + '<div>剩余未发：<strong>' + escapeAttr(remLine) + '</strong></div>'
           + ((row.test_pending || row.schedule_pending || row.pending_jobs)
             ? ('<div>队列：'
@@ -867,7 +884,7 @@ async function boot() {
       feishu_table_name: loaded.feishu_table_name || '',
       feishu_table_id: loaded.feishu_table_id || '',
       window_minutes: loaded.window_minutes || 30,
-      batch_size: loaded.batch_size || 15,
+      batch_size: Math.max(0, numAllowZero(loaded.batch_size, 15)),
     }, ...SEED.filter(s => s.mailbox !== normalizeMailbox(loaded.mailbox)).map(s => ({...s}))];
     activeMailbox = normalizeMailbox(loaded.mailbox);
     renderAccounts();
