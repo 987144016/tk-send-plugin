@@ -1,0 +1,7 @@
+{
+  "name": "com.tk.outreach.sendqueue",
+  "description": "TK Send Plugin local queue starter (8767)",
+  "path": "C:\\tk邀约\\tiktok-outreach\\packages\\send-plugin\\native-host\\tk_send_queue_host.exe",
+  "type": "stdio",
+  "allowed_origins": [ "chrome-extension://hihflgcoijhafhcdcgfejnmjcofgifon/" ]
+}

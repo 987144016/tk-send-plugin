@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>TK Send Plugin · Gmail Web</title>
+<style>
+body{font:15px/1.6 system-ui;background:#f3f6f5;color:#173b32;margin:0}
+main{max-width:920px;margin:32px auto;background:white;padding:28px 30px;border-radius:12px;box-shadow:0 1px 8px #0001}
+h1{font-size:1.35rem;margin:0 0 12px}
+h2{font-size:1.05rem;margin:22px 0 10px;color:#0f4a3a}
+button{padding:10px 18px;margin:10px 8px 10px 0;cursor:pointer;border-radius:8px;border:1px solid #c5d5cf;background:#176d52;color:#fff}
+button#pause{background:#6b3a3a}
+button#save{background:#2a5f8f}
+button.secondary{background:#eef3f1;color:#173b32}
+button.danger{background:#8b3a3a}
+button.tiny{padding:6px 10px;margin:0 4px 0 0;font-size:13px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7faf9;padding:12px;border-radius:8px}
+code{background:#eef3f1;padding:2px 6px;border-radius:4px}
+.warn{color:#8a3b12;background:#fff4e8;padding:10px 12px;border-radius:8px;margin:0 0 16px}
+.hint{font-size:12px;color:#5a7269;margin-top:3px}
+.row{margin-top:8px}
+.round-panel{background:#eef7f3;border:1px solid #c5d5cf;border-radius:10px;padding:14px 16px;margin:8px 0 16px;line-height:1.7}
+button#send-now{background:#b45309}
+button#send-now:disabled{opacity:.55;cursor:not-allowed}
+#toast{display:none;margin:12px 0;padding:12px 14px;border-radius:10px;font-weight:600;line-height:1.5}
+#toast.show{display:block}
+#toast.ok{background:#e7f8ee;color:#0f4a3a;border:1px solid #9fd5b5}
+#toast.err{background:#fdecec;color:#7a1f1f;border:1px solid #f0b4b4}
+#toast.info{background:#fff4e8;color:#8a3b12;border:1px solid #f0c9a0}
+.acct{border:1px solid #c5d5cf;border-radius:10px;padding:14px;margin:0 0 12px;background:#fafcfb;position:relative}
+.acct.active{border-color:#176d52;box-shadow:0 0 0 2px #176d5233;background:#f0faf5}
+.acct .badge{display:inline-block;background:#176d52;color:#fff;font-size:12px;padding:2px 8px;border-radius:999px;margin-left:8px}
+.acct .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:8px}
+.acct .full{grid-column:1 / -1}
+label{display:block;font-weight:600;margin-bottom:4px;font-size:13px}
+input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf;border-radius:8px;font:inherit}
+.acct-actions{margin-top:10px}
+#active-label{font-weight:700;color:#0f4a3a}
+.sched-acct{border:1px solid #c5d5cf;border-radius:8px;padding:10px 12px;margin:0 0 8px;background:#fff}
+.sched-acct.active{border-color:#176d52;background:#f0faf5}
+.sched-acct .who{font-weight:700}
+@media (max-width:720px){.acct .grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>TK Send Plugin · Gmail Web（多账号）</h1>
+<p class="warn">一点即运行。发信 = Gmail <strong>网页点击</strong>。禁止 Gmail API / 远程调试 / 新开 Chrome。<strong>不要工作台、识别码、配对码</strong>。每邮箱只用<strong>自己的</strong>模板；禁止跨号。<strong>一人多号：每个 Gmail 标签页各自登录一个账号，扩展只领本页签登录号的任务，不再点头像切号</strong>；多个页签按顺序发。「立即发送（按Y人密送一封测发）」对每个剩余>0的账号入队<strong>1封密送</strong>，密送栏一次粘贴Y个邮箱（Y=「一次发多少人」；剩余=0跳过）。每个号发完先写飞书，再扫同号收件箱（含垃圾/可疑邮件）回写回复时间。<strong>节奏设置：「一次发多少人」= 这一批最多发几个人，发满就停，隔「批次间隔」分钟再发下一批</strong>。禁止一次性群发全部。</p>
+
+<h2>账号列表 <span class="hint" style="font-weight:400">（可添加 / 删除；点「设为当前」切换 active）</span></h2>
+<div id="accounts"></div>
+<div class="row">
+  <button id="add-account" type="button" class="secondary">＋ 添加账号</button>
+</div>
+
+<p>当前发件号（active）：<span id="active-label">—</span>
+  · 策略：<strong>每个 Gmail 标签页固定自己的账号</strong>（扩展按页签登录号领任务，不切号）</p>
+<p class="hint" id="active-ux-hint">active = 新建任务默认归属的邮箱。面板下方列出每个账号的下一批时间 / 人数 / 剩余。</p>
+
+<div class="row">
+  <button id="save" type="button">保存参数</button>
+  <button id="connect" type="button">连接并启动（active）</button>
+  <button id="pause" type="button">暂停本机发送</button>
+  <button id="send-now" type="button" title="每个剩余>0的账号入队1封密送；密送粘贴Y人；剩余=0跳过；不切号不等节奏">立即发送（按Y人密送一封测发）</button>
+</div>
+
+<h2>发信排程（双账号）</h2>
+<div id="round-panel" class="round-panel" role="status">
+  <div id="schedule-summary" class="hint" style="margin-bottom:8px">汇总读取中…</div>
+  <div id="accounts-schedule">账号排程读取中…</div>
+  <hr style="border:none;border-top:1px solid #c5d5cf;margin:12px 0">
+  <div><strong>当前发件号</strong>下一批预计：<strong id="next-eta">读取中…</strong></div>
+  <div>当前发件号下一批最多：<strong id="next-count">…</strong> <span class="hint" style="display:inline">（「一次发多少人」=Y；立即发送=按Y人密送一封测发，≠等定时）</span></div>
+  <div>当前发件号剩余未发：<strong id="remaining">…</strong></div>
+  <div class="hint" id="round-note">下一批显示「已启动，约 N 分钟后发这一批（最多 N 人）」或未来 Asia/Shanghai 墙钟；点「暂停本机发送」后改为「已暂停」并隐藏倒计时。剩余未发=本表可发（含 &gt;24h 可再发）且跨表 24h 去重。排程失败不影响发信。</div>
+</div>
+
+<p>本地队列：<code>http://127.0.0.1:8767</code></p>
+<div id="toast" role="status" aria-live="polite"></div>
+<pre id="status" role="status"></pre>
+<small>「连接并启动」会经 Native Messaging 自动拉起本机队列（8767）。首次部署请跑一次「一点即运行」以注册 Native Host。然后 chrome://extensions 重载 extension。排程面板只读缓存，超时不闪离线；发信不依赖排程接口。</small>
+</main>
+<script type="module" src="options.js"></script>
+</body>
+</html>

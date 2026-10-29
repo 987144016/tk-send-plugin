@@ -1,0 +1,42 @@
+# Runtime / queue / PII
+data/jobs/*
+!data/jobs/.gitkeep
+data/logs/*
+!data/logs/.gitkeep
+data/receipts/
+data/queue-state.json
+data/sent-pace.jsonl
+data/*.jsonl
+*.log
+*.log.*
+
+# Live secrets / local config (keep *.example.json)
+config/one-mailbox.json
+config/multi-accounts.json
+config/one-mailbox.before-*
+.env
+*.pem
+*.key
+*token*
+!**/protocol.js
+
+# Backups & caches
+backup-before-*/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+.venv-runtime/
+node_modules/
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+
+# Packaging outputs
+*.zip
+dist/

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "TK Send Plugin · Gmail Web (standalone)",
+  "version": "0.3.4",
+  "description": "Standalone Gmail web click-send. v0.3.4: ONE BCC job per mailbox (Y=Options batch size); Feishu writeback ALL Y rows; multi-tab own-mailbox claim.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting",
+    "tabs",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://accounts.google.com/*",
+    "http://127.0.0.1:8767/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "TK Send Plugin (Gmail Web)"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "phase": "B_scaffold",
+  "notes": "Multi-account scaffold 2026-10-29. Each mailbox owns template + Feishu table + pace. After account A finishes its Y batch or remaining=0, switch active to next. Keep 立即发送（测1人） on active only. Do NOT mass-send. Remote DESKTOP-8NA67CD = FastMoss collect only; no send.",
+  "armed": false,
+  "switch_policy": {
+    "mode": "finish_then_next",
+    "description": "发完切换：当前账号本轮 Y 发完或飞书剩余未发=0 时，active 切到 accounts 列表下一行（循环）",
+    "keep_test1_on_active": true
+  },
+  "active_mailbox": "zhuhaochen9303j@gmail.com",
+  "accounts": [
+    {
+      "mailbox": "zhuhaochen9303j@gmail.com",
+      "template_name": "tk邀约模板3",
+      "feishu_table_name": "zhuhaochen9303j@gmail.com",
+      "feishu_table_id": "tblh3s12ihno8jEi",
+      "bd_key": "zhuhaochen9303j",
+      "pace": {
+        "max_messages_per_window": 15,
+        "window_minutes": 30,
+        "daily_limit": 500,
+        "min_gap_seconds": 90
+      },
+      "armed": false,
+      "role": "company_pc_dual_test_A",
+      "notes": "Was 达人·test; unsent trial pool ~86. Dual-account test on 公司电脑."
+    },
+    {
+      "mailbox": "wuxiaoyu28le@gmail.com",
+      "template_name": "tk邀约矫正内衣",
+      "feishu_table_name": "wuxiaoyu28le@gmail.com",
+      "feishu_table_id": "tblJu7x9zCtIsa9w",
+      "bd_key": "wuxiaoyu28le",
+      "pace": {
+        "max_messages_per_window": 15,
+        "window_minutes": 30,
+        "daily_limit": 500,
+        "min_gap_seconds": 90
+      },
+      "armed": false,
+      "role": "company_pc_dual_test_B",
+      "notes": "Migrated 1065 already-sent from 达人邀约明细 (负责邮箱=wuxiaoyu). Own template only. Do not reuse on other mailboxes."
+    }
+  ],
+  "forbidden_templates_cross_account": true,
+  "feishu_base": {
+    "base_token": "YY5Cb3gAVaREQksZF16cJFc0nQe",
+    "wiki_token": "DsxywE9IhiYKxmkqu6Mc9VXtnaf",
+    "wiki_url": "https://kwweh4rymi1.feishu.cn/wiki/DsxywE9IhiYKxmkqu6Mc9VXtnaf"
+  },
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 8767
+  },
+  "chrome_policy": {
+    "tabs_only": true,
+    "no_new_chrome_windows": true,
+    "no_remote_debug": true,
+    "reuse_existing_gmail_tab": true
+  },
+  "remote": {
+    "device": "DESKTOP-8NA67CD",
+    "send": "STOPPED",
+    "fastmoss_collect_only": true,
+    "note": "Jim 2026-10-29: 远端不用发信；收回双账号测试到公司电脑。remote_active already false."
+  },
+  "updated_at": "2026-10-29T15:00:14+08:00",
+  "updated_via": "phaseA-mailbox-architecture"
+}
