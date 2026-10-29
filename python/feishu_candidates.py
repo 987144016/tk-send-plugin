@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 GMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com$", re.I)
 UNSENT_STATUS = {"", "pending", "未发送", "待发送", "未发", "ready", "待发"}
 BLOCKED_STATUS = {"replied", "bounced", "已回复", "退信"}
+# 可疑拦截 is NOT blocked — Jim: can retry later with a new template.
 SENT_LIKE = {"sent", "已发送", "已发", "success", "成功", "delivered"}
 CROSS_BD_HOURS = 24
 SH = ZoneInfo("Asia/Shanghai")

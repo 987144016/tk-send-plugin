@@ -405,6 +405,11 @@ async function finish(config, current) {
         : (' · 收件箱已扫描无新回复');
       if (spamN) scanNote += ' · 垃圾/可疑邮件 ' + spamN + ' 条已一并扫描';
       if (susN) scanNote += ' · 其中标记可疑 ' + susN + ' 条（不影响后续发送，换模板即可）';
+      const bw = (scanned && scanned.bounce_writeback) || [];
+      const hardN = bw.filter(x => x && x.ok && x.label === '退信').length;
+      const blockN = bw.filter(x => x && x.ok && x.label === '可疑拦截').length;
+      if (hardN) scanNote += ' · 退信 ' + hardN + ' 条';
+      if (blockN) scanNote += ' · 可疑拦截 ' + blockN + ' 条（可换模板重试）';
       if (rwOk) scanNote += ' · 已回写回复时间 ' + rwOk + ' 条';
       if (fin.writeback && fin.writeback.ok === false)
         scanNote += ' · 飞书写回失败:' + (fin.writeback.reason || '');
@@ -661,3 +666,172 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 });
 chrome.alarms.create('send-plugin-heartbeat', {periodInMinutes: 0.5});
 tick();
+
+
+/* ===== Auto-update (public GitHub tk-send-plugin) ===== */
+const UPDATE_REPO = '987144016/tk-send-plugin';
+const UPDATE_VERSION_URL = `https://raw.githubusercontent.com/${UPDATE_REPO}/main/VERSION`;
+const UPDATE_ALARM = 'send-plugin-update-check';
+const UPDATE_PERIOD_MIN = 360; // 6h
+
+function parseVerTuple(s) {
+  s = String(s || '').trim().replace(/^[vV]/, '');
+  const [core, ...rest] = s.split('-');
+  const parts = core.split('.').map(x => {
+    const n = parseInt(x, 10);
+    return Number.isFinite(n) ? n : 0;
+  });
+  while (parts.length < 3) parts.push(0);
+  return { nums: parts.slice(0, 4), suffix: rest.join('-') || '' };
+}
+
+function isRemoteNewer(remote, local) {
+  if (!remote) return false;
+  if (!local) return true;
+  const r = parseVerTuple(remote);
+  const l = parseVerTuple(local);
+  for (let i = 0; i < Math.max(r.nums.length, l.nums.length); i++) {
+    const a = r.nums[i] || 0, b = l.nums[i] || 0;
+    if (a !== b) return a > b;
+  }
+  return false; // same core → not newer
+}
+
+function nativeCmd(cmd, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    let port;
+    try { port = chrome.runtime.connectNative(NATIVE_HOST); }
+    catch (e) { resolve({ok: false, error: String(e)}); return; }
+    let done = false;
+    const finish = (o) => { if (done) return; done = true; try { port.disconnect(); } catch {} resolve(o); };
+    const t = setTimeout(() => finish({ok: false, error: 'timeout'}), timeoutMs);
+    port.onMessage.addListener((msg) => { clearTimeout(t); finish(msg || {ok: true}); });
+    port.onDisconnect.addListener(() => {
+      clearTimeout(t);
+      finish({ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'disconnect'});
+    });
+    try { port.postMessage({cmd}); }
+    catch (e) { clearTimeout(t); finish({ok: false, error: String(e)}); }
+  });
+}
+
+async function fetchRemoteVersion() {
+  try {
+    const r = await fetch(UPDATE_VERSION_URL, {cache: 'no-store', signal: AbortSignal.timeout(12000)});
+    if (!r.ok) throw Error('HTTP ' + r.status);
+    const text = (await r.text()).trim();
+    if (text) return {ok: true, remote: text, source: 'branch_VERSION'};
+  } catch (e) {
+    /* fall through */
+  }
+  try {
+    const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
+      headers: {Accept: 'application/vnd.github+json'},
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!r.ok) throw Error('HTTP ' + r.status);
+    const j = await r.json();
+    const tag = (j.tag_name || '').trim();
+    if (tag) return {ok: true, remote: tag.replace(/^[vV]/, ''), source: 'release_tag', tag};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e)};
+  }
+  return {ok: false, error: 'no remote version'};
+}
+
+async function localVersion() {
+  const n = await nativeCmd('version', 8000);
+  if (n && n.ok && n.local) return n.local;
+  try { return chrome.runtime.getManifest().version; } catch { return ''; }
+}
+
+async function setUpdateBadge(info) {
+  try {
+    if (info && info.needsReload) {
+      await chrome.action.setBadgeText({text: '↑'});
+      await chrome.action.setBadgeBackgroundColor({color: '#b45309'});
+      await chrome.action.setTitle({title: `TK Send Plugin: 已更新到 ${info.after || info.remote || ''}，请在 chrome://extensions 重新加载（或点徽章后看 Options）`});
+    } else if (info && info.available) {
+      await chrome.action.setBadgeText({text: '↑'});
+      await chrome.action.setBadgeBackgroundColor({color: '#176d52'});
+      await chrome.action.setTitle({title: `TK Send Plugin: 有新版本 ${info.remote}（当前 ${info.local}）`});
+    } else {
+      await chrome.action.setBadgeText({text: ''});
+      await chrome.action.setTitle({title: 'TK Send Plugin (Gmail Web)'});
+    }
+  } catch {}
+}
+
+async function checkAndApplyUpdate({force = false} = {}) {
+  const rem = await fetchRemoteVersion();
+  if (!rem.ok) {
+    await chrome.storage.local.set({updateState: {at: Date.now(), ok: false, error: rem.error}});
+    return rem;
+  }
+  const local = await localVersion();
+  const newer = isRemoteNewer(rem.remote, local);
+  if (!newer && !force) {
+    const st = {at: Date.now(), ok: true, available: false, local, remote: rem.remote, source: rem.source};
+    await chrome.storage.local.set({updateState: st});
+    await setUpdateBadge(null);
+    return st;
+  }
+  // Prefer Native Messaging apply (git pull or zip overlay)
+  const applied = await nativeCmd('apply_update', 120000);
+  if (applied && applied.ok && applied.updated) {
+    const st = {
+      at: Date.now(), ok: true, available: false, updated: true, needsReload: true,
+      local, remote: rem.remote, after: applied.after, method: applied.method,
+    };
+    await chrome.storage.local.set({updateState: st});
+    await setUpdateBadge(st);
+    // Auto-reload when safe (no in-flight send job)
+    try {
+      const state = await read();
+      const busy = !!(state.current && (state.current.job || state.current.receipt || state.current.stage));
+      if (!busy) {
+        chrome.runtime.reload();
+        return st;
+      }
+    } catch {}
+    return st;
+  }
+  // Could not apply automatically — surface availability + hint manual script
+  const st = {
+    at: Date.now(), ok: true, available: newer, updated: false,
+    local, remote: rem.remote, source: rem.source,
+    applyError: applied && (applied.error || applied.reason),
+    hint: '自动更新失败时请双击 Update-SendPlugin.ps1，然后在 chrome://extensions 重新加载扩展',
+  };
+  await chrome.storage.local.set({updateState: st});
+  await setUpdateBadge(st);
+  return st;
+}
+
+async function ensureUpdateAlarm() {
+  await chrome.alarms.create(UPDATE_ALARM, {periodInMinutes: UPDATE_PERIOD_MIN});
+}
+
+chrome.alarms.onAlarm.addListener(a => {
+  if (a.name === UPDATE_ALARM) checkAndApplyUpdate().catch(() => {});
+});
+chrome.runtime.onInstalled.addListener(() => { ensureUpdateAlarm(); checkAndApplyUpdate().catch(() => {}); });
+chrome.runtime.onStartup.addListener(() => { ensureUpdateAlarm(); checkAndApplyUpdate().catch(() => {}); });
+ensureUpdateAlarm();
+// First check shortly after SW starts (avoid racing send tick)
+setTimeout(() => checkAndApplyUpdate().catch(() => {}), 8000);
+
+// message hooks
+const _prevOnMessage = chrome.runtime.onMessage.hasListeners ? null : null;
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (sender.id !== chrome.runtime.id) return;
+  if (message.type === 'check_update') {
+    checkAndApplyUpdate({force: !!message.force}).then(r => reply(r)).catch(e => reply({ok: false, error: String(e)}));
+    return true;
+  }
+  if (message.type === 'get_update_state') {
+    chrome.storage.local.get('updateState').then(s => reply(s.updateState || null));
+    return true;
+  }
+});
+

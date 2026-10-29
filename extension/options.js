@@ -100,7 +100,7 @@ function readAccountsFromDom() {
     feishu_table_name: (node.querySelector('.f-table-name').value || '').trim(),
     feishu_table_id: (node.querySelector('.f-table-id').value || '').trim(),
     window_minutes: Math.max(1, parseInt(node.querySelector('.f-x').value, 10) || 30),
-    batch_size: Math.max(1, parseInt(node.querySelector('.f-y').value, 10) || 15),
+    batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? n : 15; })(),
   }));
 }
 
@@ -115,7 +115,7 @@ function validateAccounts(list, active) {
     if (!a.template_name) throw Error(a.mailbox + ' 缺少 Gmail邮件模板名');
     if (!a.feishu_table_name && !a.feishu_table_id)
       throw Error(a.mailbox + ' 缺少飞书表名或 table_id');
-    if (a.batch_size < 1 || a.batch_size > 100) throw Error('一次发多少人须 1–100（禁止无限制群发）');
+    if (!Number.isFinite(a.batch_size) || a.batch_size < 0 || a.batch_size > 100) throw Error('一次发多少人须 0–100（0=暂时禁用本号；禁止无限制群发）');
     if (a.window_minutes < 1 || a.window_minutes > 1440) throw Error('批次间隔须 1–1440 分钟');
   }
   // cross-account template ban
@@ -160,8 +160,8 @@ function renderAccounts() {
         </div>
         <div>
           <label>一次发多少人（上限）</label>
-          <input class="f-y" type="number" min="1" max="100" value="${a.batch_size}">
-          <div class="hint">发满这个人数就停，等下个批次再发；不是一次性群发全部</div>
+          <input class="f-y" type="number" min="0" max="100" value="${a.batch_size}">
+          <div class="hint">发满这个人数就停，等下个批次再发；不是一次性群发全部。<strong>0=暂时禁用本号</strong>（不入队定时、立即发送也跳过）</div>
         </div>
         <div>
           <label>批次间隔（分钟）</label>
@@ -621,7 +621,7 @@ async function refresh() {
       health,
       '表单 active：' + (a.mailbox || '-') + ' / ' + (a.template_name || '-')
         + ' / 飞书 ' + (a.feishu_table_name || a.feishu_table_id || '-')
-        + ' / 一次最多 ' + (a.batch_size || '-') + ' 人，批间隔 ' + (a.window_minutes || '-') + ' 分钟'
+        + ' / 一次最多 ' + (a.batch_size == null ? '-' : a.batch_size) + ' 人' + (Number(a.batch_size) === 0 ? '（暂时禁用）' : '') + '，批间隔 ' + (a.window_minutes || '-') + ' 分钟'
         + ' · 共 ' + accounts.length + ' 个账号',
       s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',
       s.config?.sender ? '发件邮箱（会话）：' + s.config.sender : '',
@@ -795,6 +795,54 @@ el('pause').onclick = async () => {
   }
 };
 
+
+async function renderUpdateBanner() {
+  const box = el('update-banner');
+  if (!box) return;
+  let st = null;
+  try { st = await chrome.runtime.sendMessage({type: 'get_update_state'}); } catch {}
+  if (!st) {
+    try {
+      const s = await chrome.storage.local.get('updateState');
+      st = s.updateState;
+    } catch {}
+  }
+  if (!st) { box.style.display = 'none'; return; }
+  if (st.needsReload || st.updated) {
+    box.style.display = 'block';
+    box.className = 'warn okish';
+    box.innerHTML = '已自动更新到 <strong>' + (st.after || st.remote || '') +
+      '</strong>（原 ' + (st.local || '') + '）。请打开 <code>chrome://extensions</code> 点击本扩展「重新加载」。' +
+      '<div><button type="button" id="btn-check-update" class="secondary">再检查更新</button></div>';
+  } else if (st.available) {
+    box.style.display = 'block';
+    box.className = 'warn';
+    box.innerHTML = '发现新版本 <strong>' + (st.remote || '') +
+      '</strong>（当前 ' + (st.local || '') + '）。优先自动更新；若失败请双击包根目录 <code>Update-SendPlugin.ps1</code>，然后重新加载扩展。' +
+      (st.applyError ? ('<div class="hint">自动更新：' + String(st.applyError) + '</div>') : '') +
+      '<div><button type="button" id="btn-check-update">立即检查并更新</button></div>';
+  } else if (st.ok === false && st.error) {
+    box.style.display = 'none';
+  } else {
+    box.style.display = 'none';
+  }
+  const b = el('btn-check-update');
+  if (b) b.onclick = async () => {
+    showToast('正在检查更新…', 'info', 4000);
+    try {
+      const r = await chrome.runtime.sendMessage({type: 'check_update', force: true});
+      await renderUpdateBanner();
+      if (r && r.updated) showToast('已更新到 ' + (r.after || r.remote) + '，请重新加载扩展', 'ok', 12000);
+      else if (r && r.available) showToast('有新版本 ' + r.remote + '，请看上方提示', 'info', 8000);
+      else if (r && r.ok) showToast('已是最新：' + (r.local || r.remote || ''), 'ok', 6000);
+      else showToast('检查失败：' + (r && r.error || 'unknown'), 'err', 8000);
+    } catch (e) {
+      showToast('检查失败：' + e.message, 'err', 8000);
+    }
+  };
+}
+
+
 async function boot() {
   let loaded = null;
   try {
@@ -833,3 +881,4 @@ async function boot() {
 
 boot();
 setInterval(refresh, POLL_MS);
+setInterval(() => { renderUpdateBanner().catch(() => {}); }, Math.max(POLL_MS, 15000));

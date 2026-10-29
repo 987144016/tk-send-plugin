@@ -73,3 +73,14 @@ python .\python\enqueue_job.py --to someone@example.com
 | 端口 | **8767** | 8765 |
 | 入口 | 一点即运行 .cmd + 扩展选项 | BD / assistant-control 面板 |
 | 配对码 | **无** | 历史有，已弃用 |
+
+
+## 更新（优先自动）
+
+公开仓库：https://github.com/987144016/tk-send-plugin
+
+1. **自动更新（默认）**：扩展启动后及每隔约 6 小时会检查 GitHub `main` 分支上的 `VERSION`（失败时再看最新 Release）。若远程更新，且本机是 git clone，Native Host 会执行 `git pull --ff-only`；非 git 安装则尝试下载 zip 覆盖（保留 `data/` 与本地 `config/*.json`）。成功后请在 `chrome://extensions` **重新加载**本扩展（空闲时扩展会尝试 `runtime.reload()`）。
+2. **手动兜底**：双击包根目录 `Update-SendPlugin.ps1`（`git pull --ff-only` → 打印 VERSION → 提示重新加载）。首次若还没有 clone：`git clone https://github.com/987144016/tk-send-plugin.git`。
+
+同事一句话更新：有网时等自动更新并 reload；不行就跑 `Update-SendPlugin.ps1` 再 reload。
+

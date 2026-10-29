@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.4",
-  "description": "Standalone Gmail web click-send. v0.3.4: ONE BCC job per mailbox (Y=Options batch size); Feishu writeback ALL Y rows; multi-tab own-mailbox claim.",
+  "version": "0.3.5",
+  "description": "Standalone Gmail web click-send. v0.3.5: Feishu 发送状态 split 退信 vs 可疑拦截 (inbox_scan classifier); keeps v0.3.4 BCC batch / multi-tab / permit-by-mailbox; auto-update checks public GitHub VERSION.",
   "permissions": [
     "storage",
     "alarms",
@@ -13,7 +13,10 @@
   "host_permissions": [
     "https://mail.google.com/*",
     "https://accounts.google.com/*",
-    "http://127.0.0.1:8767/*"
+    "http://127.0.0.1:8767/*",
+    "https://raw.githubusercontent.com/987144016/tk-send-plugin/*",
+    "https://api.github.com/repos/987144016/tk-send-plugin/*",
+    "https://github.com/987144016/tk-send-plugin/*"
   ],
   "background": {
     "service_worker": "background.js",

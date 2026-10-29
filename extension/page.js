@@ -401,6 +401,26 @@ export async function gmailPage(action,job){
     // Gmail 会把部分达人回信标成“可疑/钓鱼”。这类邮件仍然是回复，不能当没看到，
     // 只是记录时打上 suspicious 标记（换模板即可，不影响后续发送）。
     const suspiciousRe=/可疑|钓鱼|可能是垃圾邮件|请谨慎|be careful|suspicious|phishing|dangerous|scam/i;
+    // 退信=硬退；可疑拦截=Gmail Message blocked / phishing-spam style（可换模板重试）
+    const hardBounceRe=/undeliverable|mail delivery failed|delivery status notification\s*\(failure\)|returned mail|user unknown|address not found|no such user|5\.1\.1|地址不存在|找不到地址|地址失效|mailbox unavailable|invalid recipient/i;
+    const messageBlockedRe=/message blocked|has been blocked|your message to .+ has been blocked|blocked\. see technical details|邮件被拦截|可疑拦截/i;
+    const daemonFromRe=/mailer-daemon|postmaster|mail-daemon|mail delivery subsystem|noreply@google\.com/i;
+    const failedRecipientFromText=blob=>{
+      const pats=[
+        /your message to\s+([^\s>]+@[^\s>]+)\s+has been blocked/i,
+        /message to\s+([^\s>]+@[^\s>]+)\s+has been blocked/i,
+        /final-recipient:\s*rfc822;\s*(\S+)/i,
+        /(?:to|原收件人)[:：]\s*<?([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?/i,
+      ];
+      for(const p of pats){ const m=blob.match(p); if(m){ const em=(m[1]||'').toLowerCase().replace(/[>,;]+$/,''); if(em.includes('@')&&!daemonFromRe.test(em)) return em; } }
+      return '';
+    };
+    const classifyBounce=blob=>{
+      if(messageBlockedRe.test(blob)) return 'suspicious_block';
+      if(daemonFromRe.test(blob) && hardBounceRe.test(blob)) return 'hard_bounce';
+      if(daemonFromRe.test(blob) && /delivery status|undeliver|mailer-daemon|failure/i.test(blob) && !messageBlockedRe.test(blob)) return 'hard_bounce';
+      return '';
+    };
     const pickRows=(rows2,limit)=>rows2.slice(0,limit);
     const toRecord=row=>{
       const body=(row.innerText||'').trim();
@@ -410,13 +430,17 @@ export async function gmailPage(action,job){
       if(!from.includes('@')) return null;
       if(wanted && from===wanted) return null;
       const isUnread = row.classList.contains('zE') || !!row.querySelector('.yW span[email],.zF');
+      const bounce_kind=classifyBounce(blob+' '+from);
+      const failed_recipient=bounce_kind?failedRecipientFromText(blob):'';
       return {
         from,
         subject:(body.split(String.fromCharCode(10))[0]||'').slice(0,120),
-        snippet:body.slice(0,180),
+        snippet:body.slice(0,220),
         unread:!!isUnread,
         at:row.getAttribute('aria-label')||'',
         suspicious:suspiciousRe.test(blob),
+        bounce_kind:bounce_kind||undefined,
+        failed_recipient:failed_recipient||undefined,
       };
     };
     for(const row of pickRows(rows,80)){
@@ -425,8 +449,9 @@ export async function gmailPage(action,job){
       inboxRows.push(record);
       const matched = !!recipient && record.from===recipient;
       const blob=((row.innerText||'')+' '+(row.getAttribute('aria-label')||'')).toLowerCase();
-      const looksReply = /回复|re:|答覆|answered|退信|delivery status|mailer-daemon|undeliverable/i.test(blob);
-      if(matched || looksReply) replies.push({...record, matched, heuristic:!matched});
+      const looksReply = /回复|re:|答覆|answered/i.test(blob);
+      const looksBounce = !!record.bounce_kind || /退信|delivery status|mailer-daemon|undeliverable|message blocked/i.test(blob);
+      if(matched || looksReply || looksBounce) replies.push({...record, matched, heuristic:!matched});
     }
     // 可疑/垃圾邮件里的回信：Gmail 常把“可疑”邮件直接丢进垃圾邮件标签。
     // 顺手扫一遍垃圾邮件箱，把里面的来信也带回去（点链接是 SPA 切换，不刷新页面）。

@@ -1,8 +1,20 @@
-# Send-plugin project memory (Jim)
+﻿# Send-plugin project memory (Jim)
 
-Updated: 2026-10-29 18:05 Asia/Shanghai
+Updated: 2026-10-29 18:20 Asia/Shanghai
+
+## 2026-10-29 v0.3.5 bounce-label：退信 vs 可疑拦截
+- **Jim**: Feishu 发送状态 must distinguish true bounce from Gmail suspicious interception.
+- **Labels**:
+  - `退信` = hard bounce（invalid address / undeliverable / mailer-daemon permanent）→ still BLOCKED, do not resend
+  - `可疑拦截` = Gmail Message blocked / phishing-spam-style block → **NOT blocked**; retry later with new template OK
+- **Wire**: `page.js` scan_inbox tags `bounce_kind` + `failed_recipient`; `local_queue.inbox_scan` → `classify_delivery_notice` → `mark_feishu_delivery_status`
+- Feishu select option `可疑拦截` added on both mailbox tables (fldayIuQnk).
+- Keeps v0.3.4: BCC batch / multi-tab / permit-by-mailbox / Y密送. Do not regress.
+- Today's 退信 rows with send_date=2026-10-29: **0** (no invent). Historical 退信 left as-is unless explicit evidence of Message-blocked.
+- Reload extension once after upgrade.
 
 ## 2026-10-29 v0.3.4 BCC 密送批量（影刀同款）
+
 - **Changed**: 入队不再一人一封 To。每个 remaining>0 账号入队 **ONE job**：
   - `recipient_mode: "bcc"`
   - `recipients: [email1..emailY]`（Y=Options「一次发多少人」/ max_messages_per_window，cap remaining≤100）
@@ -18,8 +30,7 @@ Updated: 2026-10-29 18:05 Asia/Shanghai
 
 ## 2026-10-29 v0.3.3 立即发送 = 按 Y 封/号测发
 - **Changed**: 「立即发送」不再「每账号测1人」；改为每个 remaining>0 账号入队 **Y = Options「一次发多少人」**（max_messages_per_window）封，min(Y, remaining)。
-- 每封仍是 **To: 单收件人**（
-ecipient_mode=to）；page.js 有 BCC 路径但 enqueue **未启用**。
+- 每封仍是 **To: 单收件人**（recipient_mode=to）；page.js 有 BCC 路径但 enqueue **未启用**。
 - 测发：无 pace / 无切号等待；Options 文案已改。
 - 叠在 v0.3.2：permit 绑 tab 本号模板（不再 forbidden abort）；匹配开窗草稿接管点发送。
 
@@ -30,12 +41,11 @@ ecipient_mode=to）；page.js 有 BCC 路径但 enqueue **未启用**。
 
 
 ## 2026-10-29 v0.3.2 permit own-template + draft claim (mid-compose abort fix)
-- **Root cause**: worker permit rebound via global ctive_mailbox (zhuhaochen). wuxiaoyu tab's Options template 	k邀约矫正内衣 was in cross-account orbidden → 403 mid-insert; draft left open; job marked uncertain/done.
+- **Root cause**: worker permit rebound via global active_mailbox (zhuhaochen). wuxiaoyu tab's Options template 	k邀约矫正内衣 was in cross-account forbidden → 403 mid-insert; draft left open; job marked uncertain/done.
 - **Fix**: worker binds mailbox_entry from ody.sender / current_mailbox; permit allows THIS mailbox Options template always (forbidden list no longer aborts); mismatch only if template != own.
 - **unexpected_existing_draft**: matching To+subject+body → claim draft and continue to Send; stale → discard/close and continue (never hard-abandon).
 - **Test requeue**: 	est_per_account / mid-compose errors (forbidden template, unexpected draft, …) requeue instead of done (except Gmail send-limit).
-- **Jim「一次性发多个邮箱」**: current phase still **N separate To: 1-to-1 jobs** (
-ecipient_mode=to). Options「一次发多少人」= batch Y = how many **separate** jobs per window, **not** one BCC with Y addresses. page.js has a BCC path but enqueue never sets 
+- **Jim「一次性发多个邮箱」**: current phase still **N separate To: 1-to-1 jobs** (recipient_mode=to). Options「一次发多少人」= batch Y = how many **separate** jobs per window, **not** one BCC with Y addresses. page.js has a BCC path but enqueue never sets 
 ecipient_mode=bcc.
 - Reload extension once after upgrade; click 立即发送 (or pending requeue) — do not babysit.
 

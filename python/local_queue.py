@@ -99,10 +99,10 @@ def settings_view(c: dict) -> dict:
             "feishu_table_name": (a.get("feishu_table_name") or "").strip(),
             "feishu_table_id": (a.get("feishu_table_id") or "").strip(),
             "window_minutes": int(p.get("window_minutes") or pace.get("window_minutes") or 30),
-            "batch_size": int(p.get("max_messages_per_window") or pace.get("max_messages_per_window") or 15),
+            "batch_size": (pace_batch_y(p, pace_batch_y(pace, 15))),
             "pace": {
                 "window_minutes": int(p.get("window_minutes") or 30),
-                "max_messages_per_window": int(p.get("max_messages_per_window") or 15),
+                "max_messages_per_window": pace_batch_y(p, 15),
                 "daily_limit": int(p.get("daily_limit") or 500),
                 "min_gap_seconds": int(p.get("min_gap_seconds") or 90),
             },
@@ -117,7 +117,7 @@ def settings_view(c: dict) -> dict:
         "feishu_table_name": (entry.get("feishu_table_name") or feishu.get("table_name") or "").strip(),
         "feishu_table_id": (entry.get("feishu_table_id") or feishu.get("table_id") or "").strip(),
         "window_minutes": int(pace.get("window_minutes") or 30),
-        "batch_size": int(pace.get("max_messages_per_window") or 15),
+        "batch_size": pace_batch_y(pace, 15),
         "daily_limit": int(pace.get("daily_limit") or 500),
         "min_gap_seconds": int(pace.get("min_gap_seconds") or 90),
         "armed": bool(c.get("armed")),
@@ -152,11 +152,16 @@ def apply_settings(body: dict) -> dict:
                 templates[template] = mailbox
                 pace_in = raw.get("pace") if isinstance(raw.get("pace"), dict) else {}
                 wm = int(raw.get("window_minutes") or pace_in.get("window_minutes") or 30)
-                bs = int(raw.get("batch_size") or pace_in.get("max_messages_per_window") or 15)
+                if "batch_size" in raw and raw.get("batch_size") is not None and raw.get("batch_size") != "":
+                    bs = _int_allow_zero(raw.get("batch_size"), 0)
+                elif "max_messages_per_window" in pace_in:
+                    bs = _int_allow_zero(pace_in.get("max_messages_per_window"), 15)
+                else:
+                    bs = 15
                 if wm < 1 or wm > 1440:
                     raise ValueError("window_minutes must be 1–1440")
-                if bs < 1 or bs > 100:
-                    raise ValueError("batch_size (Y people) must be 1–100")
+                if bs < 0 or bs > 100:
+                    raise ValueError("batch_size (Y people) must be 0–100 (0=temporarily disable account)")
                 tname = (raw.get("feishu_table_name") or "").strip()
                 tid = (raw.get("feishu_table_id") or "").strip()
                 if not tname and not tid:
@@ -248,9 +253,9 @@ def apply_settings(body: dict) -> dict:
                 raise ValueError("window_minutes must be 1–1440")
             pace["window_minutes"] = wm
         if "batch_size" in body:
-            bs = int(body.get("batch_size") or 0)
-            if bs < 1 or bs > 100:
-                raise ValueError("batch_size (Y people) must be 1–100")
+            bs = _int_allow_zero(body.get("batch_size"), 0)
+            if bs < 0 or bs > 100:
+                raise ValueError("batch_size (Y people) must be 0–100 (0=temporarily disable account)")
             pace["max_messages_per_window"] = bs
         pace.setdefault("window_minutes", 30)
         pace.setdefault("max_messages_per_window", 15)
@@ -393,12 +398,34 @@ def _pace_people(event: dict) -> int:
     return max(1, n)
 
 
+
+def _int_allow_zero(value, default: int) -> int:
+    """int() that keeps explicit 0 (unlike `x or default`)."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def pace_batch_y(pace: dict | None, default: int = 15) -> int:
+    pace = pace or {}
+    if "max_messages_per_window" in pace:
+        return _int_allow_zero(pace.get("max_messages_per_window"), default)
+    if "batch_size" in pace:
+        return _int_allow_zero(pace.get("batch_size"), default)
+    return default
+
+
 def pace_ok(c: dict, mailbox: str) -> tuple[bool, str]:
     pace = c.get("pace") or {}
     window_m = int(pace.get("window_minutes") or 30)
-    max_n = int(pace.get("max_messages_per_window") or 15)
+    max_n = pace_batch_y(pace, 15)
     daily = int(pace.get("daily_limit") or 500)
     min_gap = int(pace.get("min_gap_seconds") or 90)
+    if max_n <= 0:
+        return False, "Y=0 temporarily disabled (Options「一次发多少人」=0)"
     now = time.time()
     events = [e for e in read_pace_events() if e.get("mailbox") == mailbox and e.get("status") == "sent"]
     recent = [e for e in events if now - float(e.get("ts") or 0) <= window_m * 60]
@@ -457,10 +484,12 @@ def next_pace_allowed_ts(c: dict, mailbox: str) -> tuple[float, str]:
     """Earliest unix ts when pace allows another send; reason string."""
     pace = c.get("pace") or {}
     window_m = int(pace.get("window_minutes") or 30)
-    max_n = int(pace.get("max_messages_per_window") or 15)
+    max_n = pace_batch_y(pace, 15)
     daily = int(pace.get("daily_limit") or 500)
     min_gap = int(pace.get("min_gap_seconds") or 90)
     now = time.time()
+    if max_n <= 0:
+        return now + 365 * 24 * 3600, "Y=0 temporarily disabled"
     events = [e for e in read_pace_events() if e.get("mailbox") == mailbox and e.get("status") == "sent"]
     recent = [e for e in events if now - float(e.get("ts") or 0) <= window_m * 60]
     day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -539,7 +568,7 @@ def maybe_finish_then_next(*, remaining: int | None = None, sent_in_round: int |
             return None
         mailbox, entry = active_mailbox_entry(c)
         pace = entry.get("pace") or c.get("pace") or {}
-        batch_y = int(pace.get("max_messages_per_window") or 15)
+        batch_y = pace_batch_y(pace, 15)
         st = state()
         round_map = dict(st.get("round_sent") or {})
         if sent_in_round is None:
@@ -644,9 +673,13 @@ def pending_jobs_for_mailbox(mailbox: str) -> int:
 def account_pace(c: dict, account: dict) -> dict:
     p = account.get("pace") if isinstance(account.get("pace"), dict) else {}
     top = c.get("pace") or {}
+    if "max_messages_per_window" in p:
+        batch = _int_allow_zero(p.get("max_messages_per_window"), 15)
+    else:
+        batch = pace_batch_y(top, 15)
     return {
         "window_minutes": int(p.get("window_minutes") or top.get("window_minutes") or 30),
-        "max_messages_per_window": int(p.get("max_messages_per_window") or top.get("max_messages_per_window") or 15),
+        "max_messages_per_window": batch,
         "min_gap_seconds": int(p.get("min_gap_seconds") or top.get("min_gap_seconds") or 90),
         "daily_limit": int(p.get("daily_limit") or top.get("daily_limit") or 500),
     }
@@ -713,15 +746,21 @@ def build_account_schedule_row(c: dict, account: dict, *, is_active: bool, rotat
     allowed_ts, pace_reason = next_pace_allowed_ts(cfg_for_account(c, account), mb)
     pending_n = pending_jobs_for_mailbox(mb)
     br = pending_job_breakdown(mb)
-    next_count = min(batch_y, remaining) if remaining > 0 else 0
-    paused = not bool(state().get("enabled"))
+    y_disabled = batch_y <= 0
+    next_count = 0 if y_disabled else (min(batch_y, remaining) if remaining > 0 else 0)
+    paused = (not bool(state().get("enabled"))) or y_disabled
     eta_ts, eta_label, eta_human = _armed_eta_fields(
         remaining=remaining, next_count=next_count, allowed_ts=allowed_ts, now=now,
         pending_n=pending_n, mailbox=mb, is_active=is_active, feishu_err=feishu_err,
         rotate_eta=None if is_active else rotate_eta, paused=paused,
         test_pending=br["test_pending"], schedule_pending=br["schedule_pending"],
     )
-    if paused:
+    if y_disabled:
+        eta_ts = None
+        next_count = 0
+        eta_label = "暂时禁用（Y=0）"
+        eta_human = "暂时禁用本号（一次发多少人=0）"
+    if paused and not y_disabled:
         eta_ts = None
         next_count = 0
     return {
@@ -734,8 +773,11 @@ def build_account_schedule_row(c: dict, account: dict, *, is_active: bool, rotat
         "remaining_unsent": remaining if soft.get("count") is not None else None,
         "remaining_stale": bool(soft.get("stale")),
         "paused": paused,
+        "y_disabled": y_disabled,
         "next_round_count": next_count,
-        "next_round_count_note": ("已暂停" if paused else f"这一批最多 {batch_y} 人（剩余未发 {remaining}）"),
+        "next_round_count_note": (
+            "暂时禁用本号（Y=0）" if y_disabled else ("已暂停" if paused else f"这一批最多 {batch_y} 人（剩余未发 {remaining}）")
+        ),
         "next_round_eta": None if paused else (format_shanghai(eta_ts) if eta_ts else None),
         "next_round_eta_ts": None if paused else eta_ts,
         "next_round_eta_label": eta_label,
@@ -760,7 +802,7 @@ def build_round_status() -> dict:
     mailbox, entry = active_mailbox_entry(c)
     pace = entry.get("pace") or c.get("pace") or {}
     window_m = int(pace.get("window_minutes") or 30)
-    batch_y = int(pace.get("max_messages_per_window") or 15)
+    batch_y = pace_batch_y(pace, 15)
     min_gap = int(pace.get("min_gap_seconds") or 90)
     soft = count_unsent_gmail_soft(c)
     feishu_err = soft.get("error")
@@ -792,7 +834,7 @@ def build_round_status() -> dict:
             mailbox, entry = active_mailbox_entry(c)
             pace = entry.get("pace") or c.get("pace") or {}
             window_m = int(pace.get("window_minutes") or 30)
-            batch_y = int(pace.get("max_messages_per_window") or 15)
+            batch_y = pace_batch_y(pace, 15)
             min_gap = int(pace.get("min_gap_seconds") or 90)
             soft = count_unsent_gmail_soft(c)
             feishu_err = soft.get("error")
@@ -958,11 +1000,18 @@ def enqueue_test_per_account() -> dict:
         template = (account.get("template_name") or "").strip() or (c.get("template_name") or "").strip()
         armed = bool(c.get("armed")) and bool(account.get("armed", c.get("armed"))) and bool(template)
         pace = account.get("pace") if isinstance(account.get("pace"), dict) else (c.get("pace") or {})
-        batch_y = int(pace.get("max_messages_per_window") or pace.get("batch_size") or 15)
-        if batch_y < 1:
-            batch_y = 1
+        batch_y = pace_batch_y(pace, 15)
         if batch_y > 100:
             batch_y = 100
+        if batch_y <= 0:
+            skipped.append({
+                "mailbox": mb,
+                "reason": "y_zero_disabled",
+                "remaining_unsent": None,
+                "batch_y": 0,
+                "note": "一次发多少人=0，暂时禁用本号",
+            })
+            continue
         if not armed:
             skipped.append({
                 "mailbox": mb,
@@ -1146,6 +1195,9 @@ def enqueue_from_feishu(count: int = 1, *, reason: str = "test") -> dict:
     mailbox, entry = active_mailbox_entry(c)
     if not entry.get("armed"):
         raise ValueError("未解锁：armed=false 或 template_name 为空")
+    sched_y = pace_batch_y(entry.get("pace") if isinstance(entry.get("pace"), dict) else (c.get("pace") or {}), 15)
+    if sched_y <= 0:
+        raise ValueError("当前号一次发多少人=0（暂时禁用），跳过入队")
     assert_template_allowed(entry["template_name"], entry["forbidden"])
     already = queued_emails()
     try:
@@ -1247,7 +1299,7 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
         return {"ok": False, "reason": "feishu_not_configured"}
     sent_at = format_shanghai(time.time()).replace(" (Asia/Shanghai)", "")
     mb = (mailbox or "").strip().lower()
-    # 飞书“发送状态”是单选：中文选项已补齐（待发送/已发送/已回复/退信/无邮箱跳过）。
+    # 飞书“发送状态”是单选：中文选项已补齐（待发送/已发送/已回复/退信/可疑拦截/无邮箱跳过）。
     fields = {
         "发送状态": ["已发送"],
         "发送时间": sent_at,
@@ -1394,6 +1446,200 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
             return {"ok": ok, "record_id": rid, "reply_time": replied_at, "table_id": table}
     except Exception as e:
         return {"ok": False, "reason": str(e)}
+
+
+
+# --- bounce / suspicious-block classifier (v0.3.5) ---
+_EMAIL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_HARD_BOUNCE_RE = re.compile(
+    r"undeliverable|mail delivery failed|delivery status notification\s*\(failure\)|"
+    r"returned mail|failure notice|delivery failure|user unknown|no such user|"
+    r"address not found|recipient address rejected|does not exist|"
+    r"550[-\s]?5\.1\.1|5\.1\.1|地址不存在|找不到地址|地址失效|"
+    r"mailbox unavailable|invalid recipient|unknown user",
+    re.I,
+)
+_SUSPICIOUS_BLOCK_RE = re.compile(
+    r"message blocked|has been blocked|your message to .+ has been blocked|"
+    r"blocked\. see technical details|policy.{0,40}block|"
+    r"phishing|suspicious message|spam.?like|可能是钓鱼|可能是垃圾|"
+    r"邮件被拦截|可疑拦截|内容被拒|被判定为垃圾",
+    re.I,
+)
+_DAEMON_FROM_RE = re.compile(
+    r"mailer-daemon|postmaster|mail-daemon|noreply@google\.com|"
+    r"mail delivery subsystem",
+    re.I,
+)
+
+
+def classify_delivery_notice(*, frm: str = "", subject: str = "", snippet: str = "",
+                             at: str = "", bounce_kind: str = "") -> str | None:
+    """Return 'hard_bounce' | 'suspicious_block' | None.
+
+    退信 = permanent undeliverable / invalid address.
+    可疑拦截 = Gmail Message blocked / phishing-spam style (retry with new template OK).
+    """
+    kind = (bounce_kind or "").strip().lower()
+    if kind in {"hard_bounce", "退信", "bounce", "bounced"}:
+        return "hard_bounce"
+    if kind in {"suspicious_block", "可疑拦截", "message_blocked", "blocked"}:
+        return "suspicious_block"
+    blob = " ".join(str(x or "") for x in (frm, subject, snippet, at))
+    if _SUSPICIOUS_BLOCK_RE.search(blob):
+        return "suspicious_block"
+    from_is_daemon = bool(_DAEMON_FROM_RE.search(frm or "")) or bool(
+        _DAEMON_FROM_RE.search(blob))
+    if from_is_daemon and _HARD_BOUNCE_RE.search(blob):
+        return "hard_bounce"
+    if from_is_daemon and not _SUSPICIOUS_BLOCK_RE.search(blob):
+        # DSN without Message-blocked wording → treat as hard bounce
+        if re.search(r"delivery status|undeliver|mailer-daemon|failure", blob, re.I):
+            return "hard_bounce"
+    return None
+
+
+def extract_failed_recipient(*texts: str) -> str:
+    """Pull original recipient from bounce / Message-blocked notice text."""
+    blob = "\n".join(str(t or "") for t in texts)
+    patterns = [
+        r"Your message to\s+([^\s>]+@[^\s>]+)\s+has been blocked",
+        r"message to\s+([^\s>]+@[^\s>]+)\s+has been blocked",
+        r"Final-Recipient:\s*rfc822;\s*(\S+)",
+        r"Original-Recipient:\s*rfc822;\s*(\S+)",
+        r"X-Failed-Recipients:\s*(\S+)",
+        r"(?:To|原收件人)[:：]\s*<?([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?",
+        r"收件人[:：]\s*<?([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?",
+    ]
+    for pat in patterns:
+        m = re.search(pat, blob, re.I)
+        if m:
+            em = m.group(1).strip().lower().rstrip(".,;>")
+            if "@" in em and not _DAEMON_FROM_RE.search(em):
+                return em
+    # fallback: first non-daemon email in blob
+    for m in _EMAIL_RE.finditer(blob):
+        em = m.group(0).lower()
+        if not _DAEMON_FROM_RE.search(em):
+            return em
+    return ""
+
+
+def mark_feishu_delivery_status(
+    c: dict, *, record_id: str, status_label: str, mailbox: str = "",
+    recipient: str = "", kind: str = "",
+) -> dict:
+    """Write 发送状态 to 退信 or 可疑拦截 (v3 batch update)."""
+    rid = (record_id or "").strip()
+    label = (status_label or "").strip()
+    if not rid or label not in {"退信", "可疑拦截"}:
+        return {"ok": False, "reason": "bad_args", "record_id": rid, "label": label}
+    try:
+        from feishu_candidates import _feishu_cfg, _lark_exe
+    except ImportError:
+        from python.feishu_candidates import _feishu_cfg, _lark_exe  # type: ignore
+    import subprocess, os, tempfile
+    feishu = _feishu_cfg(c)
+    exe = _lark_exe()
+    if not exe.is_file():
+        return {"ok": False, "reason": "no_lark_cli"}
+    base = (feishu.get("base_token") or "").strip()
+    table = (feishu.get("table_id") or "").strip()
+    profile = (feishu.get("profile") or "tk-outreach-local").strip()
+    if not base or not table:
+        return {"ok": False, "reason": "feishu_not_configured"}
+    fields = {"发送状态": [label]}
+    payload = {"update_records": {rid: fields}}
+    try:
+        with tempfile.TemporaryDirectory(prefix="tk-sp-bounce-") as td:
+            path = Path(td) / "payload.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            proc = subprocess.run(
+                [str(exe), "base", "+record-batch-update",
+                 "--base-token", base, "--table-id", table,
+                 "--as", "bot", "--profile", profile,
+                 "--json", "@" + str(path)],
+                capture_output=True, timeout=120,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            raw = (proc.stdout or proc.stderr or b"").decode("utf-8", errors="replace")
+            try:
+                meta = json.loads(raw) if raw.strip() else {}
+            except Exception:
+                meta = {"raw": raw[:300]}
+            ok = proc.returncode == 0 and not (isinstance(meta, dict) and meta.get("error"))
+            LOGS.mkdir(parents=True, exist_ok=True)
+            with (LOGS / "feishu-bounce-writeback.log").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "at": now_iso(), "mailbox": mailbox, "recipient": recipient,
+                    "record_id": rid, "table_id": table, "label": label, "kind": kind,
+                    "ok": ok, "returncode": proc.returncode,
+                }, ensure_ascii=False) + "\n")
+            try:
+                feishu_cache_invalidate(table)
+            except Exception:
+                try:
+                    feishu_cache_invalidate()
+                except Exception:
+                    pass
+            return {"ok": ok, "record_id": rid, "label": label, "kind": kind,
+                    "recipient": recipient, "table_id": table}
+    except Exception as e:
+        return {"ok": False, "reason": str(e), "record_id": rid, "label": label}
+
+
+def apply_bounce_classifications(c: dict, *, mailbox: str, rows: list) -> list:
+    """From inbox_scan rows, classify bounce/block notices and write Feishu status."""
+    results = []
+    seen = set()
+    mb = (mailbox or "").strip().lower()
+    if not mb:
+        return results
+    c_rb = c
+    acc = find_account(c, mb)
+    if acc:
+        c_rb = cfg_for_account(c, acc)
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        frm = str(r.get("from") or "").strip().lower()
+        subject = str(r.get("subject") or "")
+        snippet = str(r.get("snippet") or "")
+        at = str(r.get("at") or "")
+        kind = classify_delivery_notice(
+            frm=frm, subject=subject, snippet=snippet, at=at,
+            bounce_kind=str(r.get("bounce_kind") or r.get("kind") or ""),
+        )
+        if not kind:
+            continue
+        recipient = str(r.get("failed_recipient") or "").strip().lower()
+        if not recipient or "@" not in recipient:
+            recipient = extract_failed_recipient(subject, snippet, at, frm)
+        if not recipient or "@" not in recipient:
+            results.append({"ok": False, "reason": "no_failed_recipient",
+                            "kind": kind, "from": frm, "subject": subject[:80]})
+            continue
+        key = (kind, recipient)
+        if key in seen:
+            continue
+        seen.add(key)
+        sent_job = find_sent_job(mb, recipient)
+        rid = str(sent_job.get("feishu_record_id") or "").strip()
+        if not rid:
+            results.append({"ok": False, "reason": "no_sent_job",
+                            "kind": kind, "recipient": recipient})
+            continue
+        label = "退信" if kind == "hard_bounce" else "可疑拦截"
+        try:
+            wb = mark_feishu_delivery_status(
+                c_rb, record_id=rid, status_label=label,
+                mailbox=mb, recipient=recipient, kind=kind)
+            results.append(wb)
+        except Exception as e:
+            results.append({"ok": False, "reason": str(e),
+                            "kind": kind, "recipient": recipient, "record_id": rid})
+    return results
+
 
 
 def find_sent_job(mailbox: str, recipient: str) -> dict:
@@ -1608,7 +1854,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 "pace": {
                     "window_minutes": int(pace.get("window_minutes") or 30),
-                    "max_messages_per_window": int(pace.get("max_messages_per_window") or 15),
+                    "max_messages_per_window": pace_batch_y(pace, 15),
                     "daily_limit": int(pace.get("daily_limit") or 500),
                     "min_gap_seconds": int(pace.get("min_gap_seconds") or 90),
                 },
@@ -1865,7 +2111,11 @@ class Handler(BaseHTTPRequestHandler):
                 # 「立即发送」/测发：不走 cadence/min_gap/window 限额，点了就该立刻 claim。
                 job_reason = str((job_peek or {}).get("enqueue_reason") or "").strip().lower()
                 is_test_job = job_reason in ("test", "test_per_account", "immediate_test")
-                if is_test_job:
+                # Y=0 always blocks (including 立即发送 / test), so disabled accounts never claim.
+                y_chk = pace_batch_y((pace_cfg or {}).get("pace") or {}, 15)
+                if y_chk <= 0:
+                    ok, reason = False, "Y=0 temporarily disabled"
+                elif is_test_job:
                     ok, reason = True, "test_bypass_pace"
                 else:
                     ok, reason = pace_ok(pace_cfg, pace_mailbox)
@@ -2208,9 +2458,10 @@ class Handler(BaseHTTPRequestHandler):
                     with (LOGS / "reply-notify-scaffold.log").open("a", encoding="utf-8") as f:
                         f.write(json.dumps({"at": now_iso(), **notify}, ensure_ascii=False) + "\n")
 
-                # 回写飞书“回复时间”：只认“这个号确实给它发过信”的来信，
-                # 退信（mailer-daemon）匹配不到任何已发任务，天然被排除。只补空值。
+                # 回写飞书“回复时间”：只认“这个号确实给它发过信”的来信。
+                # 退信/可疑拦截：由 classify_delivery_notice 单独写发送状态（不写回复时间）。
                 reply_writebacks = []
+                bounce_writebacks = []
                 if replies_found and scanned_mb:
                     c_rb = cfg()
                     acc_rb = find_account(c_rb, scanned_mb)
@@ -2244,6 +2495,24 @@ class Handler(BaseHTTPRequestHandler):
                                 "results": reply_writebacks,
                             }, ensure_ascii=False) + "\n")
 
+                # 退信 / 可疑拦截：从 inbox_rows + replies + spam_rows 分类写回发送状态。
+                bounce_rows = []
+                for src in (rows_seen, replies, scan.get("spam_rows") or []):
+                    for item in (src or []):
+                        if isinstance(item, dict):
+                            bounce_rows.append(item)
+                if scanned_mb and bounce_rows:
+                    c_b = cfg()
+                    bounce_writebacks = apply_bounce_classifications(
+                        c_b, mailbox=scanned_mb, rows=bounce_rows)
+                    if bounce_writebacks:
+                        LOGS.mkdir(parents=True, exist_ok=True)
+                        with (LOGS / "bounce-classify.log").open("a", encoding="utf-8") as f:
+                            f.write(json.dumps({
+                                "at": now_iso(), "mailbox": scanned_mb,
+                                "results": bounce_writebacks,
+                            }, ensure_ascii=False) + "\n")
+
                 # 清掉本号的“待补扫”标记（别的号的标记保留）。
                 scan_key = (scanned_mb or mailbox or "").strip().lower()
                 with _lock:
@@ -2269,9 +2538,10 @@ class Handler(BaseHTTPRequestHandler):
                     "replies": replies[:20],
                     "notify": notify,
                     "reply_writeback": reply_writebacks,
+                    "bounce_writeback": bounce_writebacks,
                     "spam_rows": len(scan.get("spam_rows") or []),
                     "switched_to": switched,
-                    "note": "inbox_scan done; 回复时间已按空值回写（含可疑/垃圾邮件）; no_switch 时不切号",
+                    "note": "inbox_scan done; 回复时间空值回写; 退信/可疑拦截已分类写发送状态; no_switch 时不切号",
                 })
                 return
 
