@@ -1,12 +1,14 @@
-# TK Send Plugin 0.3.16 — 同事安装
+# TK Send Plugin 0.3.17 — 同事安装
 
 发信和查回信沿用原插件流程。群播报由公司中心电脑统一发出，同事电脑不填写飞书群 ID 或机器人密钥。
 
-1. 管理员发送**私有团队扩展包**。解压后在 Chrome `chrome://extensions` 打开开发者模式，加载包内 `extension` 文件夹；已有插件则更新原文件夹并点“重新加载”。
+1. 管理员发送**私有团队扩展包**。解压后在 Chrome `chrome://extensions` 打开开发者模式，直接选择**解压出的文件夹本身**（里面能看到 `manifest.json`）。不要选择旧版 `send-plugin-v0.3.6.../send-plugin` 项目目录；`_path_lq.py` 报错就说明选错了目录。已有插件则替换原文件夹内容并点“重新加载”。
 2. 至少打开一个已登录的 Gmail 标签页。若其他已配置账号也在 Chrome 中登录，插件会补开缺少的 Gmail 页签并点击账号切换；最终每个账号最多由插件保留一个页签。原有发信参数和本地队列按现行安装流程使用；群播报不增加表单配置。
 3. 扩展选项页“定期查回信”保持开启。页面状态会显示“飞书群播报：中心端 · 待确认 N 条”。中心暂时离线时待办留在本机，恢复后自动提交。
 
-管理员在自己的电脑运行 `scripts/Start-Reply-Center.ps1`，再运行一次 `scripts/Enable-Reply-Center-Autostart.ps1`。开机自启仅作用于管理员这台电脑，并在该 Windows 用户登录后运行。云端中继不保存邮件；若两台电脑未同时在线，待办会保留在同事 Chrome 本地，等再次联网后继续。
+管理员在自己的电脑运行 `scripts/Start-Reply-Center-Silent.vbs`，再运行一次 `scripts/Enable-Reply-Center-Autostart.ps1`。开机自启仅作用于管理员这台电脑，并在该 Windows 用户登录后运行。云端中继不保存邮件；若两台电脑未同时在线，待办会保留在同事 Chrome 本地，等再次联网后继续。
+
+需要手动启动时双击 `一点即运行-发信插件-后台.vbs`，队列在后台运行，不保留黑色终端窗口。中心电脑的开机自启也通过 `wscript.exe` 隐藏启动。
 
 团队扩展包由管理员运行 `scripts/Build-Team-Reply-Extension.ps1` 生成。包内含中继客户端密钥，应只发给授权同事；不含飞书机器人密钥。公开 Git 仓库里的 `extension/relay-config.js` 为空，直接从公开仓库安装不会连接群播报中继。
 

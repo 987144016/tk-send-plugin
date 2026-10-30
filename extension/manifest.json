@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.16",
-  "description": "Standalone Gmail web click-send. v0.3.16: bounded reply detail tab and new-reply baseline.",
+  "version": "0.3.17",
+  "description": "Standalone Gmail web click-send. v0.3.17: direct-load team package, silent launcher and draft restore fix.",
   "permissions": [
     "storage",
     "alarms",

@@ -864,7 +864,7 @@ def build_account_schedule_row(c: dict, account: dict, *, is_active: bool, rotat
     br = pending_job_breakdown(mb)
     y_disabled = batch_y <= 0
     next_count = 0 if y_disabled else (min(batch_y, remaining) if remaining > 0 else 0)
-    paused = (not bool(state().get("enabled"))) or y_disabled
+    paused = (not bool(state().get("enabled"))) or (not bool(c.get("armed"))) or (not bool(account.get("armed", True))) or y_disabled
     eta_ts, eta_label, eta_human = _armed_eta_fields(
         remaining=remaining, next_count=next_count, allowed_ts=allowed_ts, now=now,
         pending_n=pending_n, mailbox=mb, is_active=is_active, feishu_err=feishu_err,
@@ -929,7 +929,7 @@ def build_round_status() -> dict:
     br_active = pending_job_breakdown(mailbox)
     allowed_ts, pace_reason = next_pace_allowed_ts(c, mailbox)
     now = time.time()
-    paused = not bool(state().get("enabled"))
+    paused = (not bool(state().get("enabled"))) or (not bool(entry.get("armed")))
     next_count = 0 if paused else (min(batch_y, remaining) if remaining > 0 else 0)
     eta_ts, eta_label, eta_human = _armed_eta_fields(
         remaining=remaining, next_count=next_count, allowed_ts=allowed_ts, now=now,
@@ -961,7 +961,7 @@ def build_round_status() -> dict:
             pending_active = pending_jobs_for_mailbox(mailbox)
             br_all = pending_job_breakdown(None)
             br_active = pending_job_breakdown(mailbox)
-            paused = not bool(state().get("enabled"))
+            paused = (not bool(state().get("enabled"))) or (not bool(entry.get("armed")))
             next_count = 0 if paused else next_count
             eta_ts, eta_label, eta_human = _armed_eta_fields(
                 remaining=remaining, next_count=next_count, allowed_ts=allowed_ts, now=now,

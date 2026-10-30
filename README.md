@@ -88,7 +88,7 @@ python .\python\enqueue_job.py --to someone@example.com
 
 同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
 
-版本见根目录 `VERSION`（当前 0.3.16-reply-relay）。
+版本见根目录 `VERSION`（当前 0.3.17-reply-relay）。
 
 Gmail 账号页签：已经按账号打开的页签保持原样；缺少页签时插件自动打开 Gmail 并点击账号菜单切到目标账号，读回当前登录邮箱后才领该号任务。切号若弹出新页签，会关闭插件刚开的临时页，流程结束后每个已配置账号最多保留一个插件管理的页签。
 

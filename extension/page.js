@@ -176,11 +176,13 @@ export async function gmailPage(action,job){
     if(compose.dataset.gmwJob===job.job_id&&!visible(body)){
       const restore=buttons(compose).filter(e=>/^(最大化|Maximize)$/i.test(e.getAttribute('aria-label')||''));
       if(restore.length!==1)return {waiting:true,stage:'正在等待本任务的 Gmail 草稿展开'};
-      for(const old of document.querySelectorAll('[data-gmw-target]'))
-        if(old.dataset.gmwTarget===job.job_id+'-restore')delete old.dataset.gmwTarget;
-      restore[0].dataset.gmwTarget=job.job_id+'-restore';
-      return {waiting:true,stage:'正在展开本任务的原 Gmail 草稿',click_selector:'[data-gmw-target="'+job.job_id+'-restore"]'};
+      const tries=Number(compose.dataset.gmwRestoreTries||'0');
+      if(tries>=2)return {error:'gmail_draft_restore_failed'};
+      compose.dataset.gmwRestoreTries=String(tries+1);
+      restore[0].click();
+      return {waiting:true,stage:'已点击最大化，等待本任务的 Gmail 草稿展开'};
     }
+    if(compose.dataset.gmwJob===job.job_id)delete compose.dataset.gmwRestoreTries;
     const previous=compose.dataset.gmwJob;
     if(previous&&previous!==job.job_id&&(job.abandoned_test_drafts||[]).includes(previous)&&!compose.dataset.gmwClicked&&text(body).includes('TK-'+previous)&&subject.value===job.subject&&addressList(compose).length===1&&addressList(compose)[0]===job.recipient.toLowerCase()){
       const close=compose.querySelector('[aria-label="保存并关闭"],[aria-label="Save & close"],[data-tooltip="Save & close"]');

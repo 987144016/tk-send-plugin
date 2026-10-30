@@ -378,6 +378,7 @@ let ensureInFlight = null;
 
 function formatEtaDisplay(j) {
   if (!j) return '—';
+  if (j.armed === false) return '发信已锁定（armed=false）；恢复后重算';
   if (j.paused === true || j.next_round_eta_label === '已暂停' || j.next_round_eta_human === '已暂停') {
     return '已暂停';
   }
@@ -410,14 +411,16 @@ async function applyRoundPayload(j) {
   const summary = el('schedule-summary');
   if (!eta) return;
   const localPaused = await isManualPaused();
-  const paused = !!(j && (j.paused === true || localPaused));
+  const locked = j?.armed === false;
+  const paused = !!(j && (j.paused === true || localPaused || locked));
+  const pauseLabel = locked ? '发信已锁定（armed=false）；恢复后重算' : '已暂停';
   const view = paused ? {
     ...j,
     paused: true,
     next_round_eta: null,
     next_round_eta_ts: null,
-    next_round_eta_label: '已暂停',
-    next_round_eta_human: '已暂停',
+    next_round_eta_label: pauseLabel,
+    next_round_eta_human: pauseLabel,
     next_round_count: 0,
     next_round_count_note: '已暂停',
     combined: {
@@ -429,15 +432,15 @@ async function applyRoundPayload(j) {
       paused: true,
       next_round_eta: null,
       next_round_eta_ts: null,
-      next_round_eta_label: '已暂停',
-      next_round_eta_human: '已暂停',
+      next_round_eta_label: pauseLabel,
+      next_round_eta_human: pauseLabel,
       next_round_count: 0,
       next_round_count_note: '已暂停',
     })),
   } : j;
   eta.textContent = formatEtaDisplay(view);
   count.textContent = paused
-    ? '已暂停'
+    ? pauseLabel
     : (String(view.next_round_count ?? 0) + ' 人'
       + (view.next_round_count_note ? '（' + view.next_round_count_note + '）' : ''));
   rem.textContent = view.feishu_error && view.remaining_unsent == null
@@ -454,7 +457,7 @@ async function applyRoundPayload(j) {
         const etaLine = yOff
           ? '已禁用（Y=0）'
           : (paused || row.paused
-            ? '已暂停'
+            ? pauseLabel
             : ((row.next_round_eta_human || '')
               + (row.next_round_eta ? ((row.next_round_eta_human ? ' · ' : '') + row.next_round_eta) : '')
               + (!row.next_round_eta_human && row.next_round_eta_label ? (' · ' + row.next_round_eta_label) : '')));
@@ -465,7 +468,7 @@ async function applyRoundPayload(j) {
           + '<div class="who">' + escapeAttr(row.mailbox || '') + ' ' + badge + '</div>'
           + '<div>模板：' + escapeAttr(row.template_name || '') + '</div>'
           + '<div>下一批：<strong>' + escapeAttr(etaLine || '—') + '</strong></div>'
-          + '<div>下一批最多：<strong>' + (yOff ? '已禁用/Y=0' : (paused || row.paused ? '已暂停' : String(row.next_round_count ?? 0))) + (yOff ? '' : ' 人') + '</strong>'
+          + '<div>下一批最多：<strong>' + (yOff ? '已禁用/Y=0' : (paused || row.paused ? pauseLabel : String(row.next_round_count ?? 0))) + (yOff || paused ? '' : ' 人') + '</strong>'
           + (((yOff || (!paused && !row.paused)) && row.next_round_count_note) ? ('（' + escapeAttr(row.next_round_count_note) + '）') : '') + '</div>'
           + '<div>剩余未发：<strong>' + escapeAttr(remLine) + '</strong></div>'
           + ((row.test_pending || row.schedule_pending || row.pending_jobs)
@@ -482,7 +485,7 @@ async function applyRoundPayload(j) {
   if (summary) {
     const c = view.combined || {};
     summary.textContent = [
-      paused ? '状态：已暂停（已隐藏下次发送倒计时）' : '',
+      paused ? ('状态：' + pauseLabel + '（当前没有下一封时间）') : '',
       '合计剩余未发：' + (c.total_remaining_unsent ?? '—'),
       '账号数：' + (c.accounts ?? view.accounts_count ?? rows.length),
       '当前发件：' + (c.active_mailbox || view.mailbox || activeMailbox),
@@ -490,13 +493,13 @@ async function applyRoundPayload(j) {
       (!paused && c.next_after_active_eta) ? ('预计切到下一号时间：' + c.next_after_active_eta) : '',
       view.test_pending ? ('即将发/正在发：' + view.test_pending + '（立即发送·每号1封密送Y人·多标签页各发本号）') : '',
       view.schedule_pending ? ('定时待发：' + view.schedule_pending) : (view.pending_jobs && !view.test_pending ? ('队列 pending：' + view.pending_jobs) : ''),
-      view.schedule_next_count != null ? ('下一批最多：' + view.schedule_next_count + ' 人') : '',
+      !paused && view.schedule_next_count != null ? ('下一批最多：' + view.schedule_next_count + ' 人') : '',
       view.schedule_note || '',
     ].filter(Boolean).join(' · ');
   }
   if (note) {
     note.textContent = [
-      paused ? '已暂停本机发送：不再显示预计下一次发信时间' : '',
+      paused ? (pauseLabel + '：当前没有下一封时间') : '',
       '当前发件号=' + (view.mailbox || activeMailbox),
       paused ? '已暂停' : (view.next_round_eta_human || ''),
       view.active_ux_note || '',
