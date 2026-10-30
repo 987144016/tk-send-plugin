@@ -32,6 +32,7 @@ try:
         count_unsent_gmail,
         list_unsent_gmail,
         count_unsent_gmail_soft,
+        find_sent_record,
         invalidate_cache as feishu_cache_invalidate,
     )
 except ImportError:  # pragma: no cover
@@ -39,8 +40,14 @@ except ImportError:  # pragma: no cover
         count_unsent_gmail,
         list_unsent_gmail,
         count_unsent_gmail_soft,
+        find_sent_record,
         invalidate_cache as feishu_cache_invalidate,
     )
+
+try:
+    from reply_notify import notify_reply
+except ImportError:  # pragma: no cover
+    from python.reply_notify import notify_reply  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "one-mailbox.json"
@@ -94,6 +101,49 @@ def normalize_reply_scan(raw, fallback=None) -> dict:
             mins = int(base.get("interval_minutes") or 10)
         base["interval_minutes"] = max(3, min(180, mins))
     return base
+
+
+def normalize_reply_notify(raw, fallback=None) -> dict:
+    base = {"enabled": False, "chat_id": "", "profile": "tk-outreach-local",
+            "start_after": ""}
+    if isinstance(fallback, dict):
+        base.update({k: fallback[k] for k in base if k in fallback})
+    if isinstance(raw, dict):
+        if "enabled" in raw:
+            base["enabled"] = bool(raw["enabled"])
+        for key in ("chat_id", "profile"):
+            if key in raw:
+                base[key] = str(raw[key] or "").strip()
+    if base["enabled"] and (not re.fullmatch(r"oc_[A-Za-z0-9]+", base["chat_id"])
+                            or not base["profile"]):
+        raise ValueError("reply_notify needs a Feishu chat_id (oc_...) and lark-cli profile")
+    return base
+
+
+def is_historical_reply_notice(c: dict, reply_time: str) -> bool:
+    """Do not broadcast old inbox mail found during the initial catch-up scan."""
+    cutoff = str((c.get("reply_notify") or {}).get("start_after") or "").strip()
+    if not cutoff or not reply_time:
+        return False
+    try:
+        received = datetime.fromisoformat(reply_time.replace("Z", "+00:00"))
+        started = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
+        return received.tzinfo is not None and started.tzinfo is not None and received <= started
+    except ValueError:
+        return False
+
+
+def normalize_reply_history_tables(raw, fallback=None) -> list[str]:
+    if raw is None:
+        raw = fallback or []
+    if isinstance(raw, str):
+        raw = re.split(r"[,，\s]+", raw)
+    if not isinstance(raw, list):
+        raise ValueError("reply_history_table_ids must be a list")
+    ids = [str(x or "").strip() for x in raw if str(x or "").strip()]
+    if any(not re.fullmatch(r"tbl[A-Za-z0-9]+", x) for x in ids):
+        raise ValueError("invalid historical Feishu table ID")
+    return list(dict.fromkeys(ids))
 
 def settings_view(c: dict) -> dict:
     """Flat settings + accounts list for Options multi-account UI."""
@@ -246,6 +296,10 @@ def apply_settings(body: dict) -> dict:
             c["updated_via"] = "options-ui-multi"
             if "reply_scan" in body or not isinstance(c.get("reply_scan"), dict):
                 c["reply_scan"] = normalize_reply_scan(body.get("reply_scan"), c.get("reply_scan"))
+            if "reply_notify" in body or not isinstance(c.get("reply_notify"), dict):
+                c["reply_notify"] = normalize_reply_notify(body.get("reply_notify"), c.get("reply_notify"))
+            if "reply_history_table_ids" in body:
+                c["reply_history_table_ids"] = normalize_reply_history_tables(body.get("reply_history_table_ids"))
             save_json(DEFAULT_CONFIG, c)
             return settings_view(c)
 
@@ -337,6 +391,10 @@ def apply_settings(body: dict) -> dict:
         c["updated_via"] = "options-ui"
         if "reply_scan" in body or not isinstance(c.get("reply_scan"), dict):
             c["reply_scan"] = normalize_reply_scan(body.get("reply_scan"), c.get("reply_scan"))
+        if "reply_notify" in body or not isinstance(c.get("reply_notify"), dict):
+            c["reply_notify"] = normalize_reply_notify(body.get("reply_notify"), c.get("reply_notify"))
+        if "reply_history_table_ids" in body:
+            c["reply_history_table_ids"] = normalize_reply_history_tables(body.get("reply_history_table_ids"))
         save_json(DEFAULT_CONFIG, c)
         return settings_view(c)
 
@@ -559,6 +617,37 @@ def format_shanghai_iso(ts: float) -> str:
         return datetime.fromtimestamp(ts, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
     except Exception:
         return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
+
+
+def parse_gmail_reply_time(raw: str) -> str | None:
+    """Parse Gmail's visible date label; never substitute the scan time."""
+    from zoneinfo import ZoneInfo
+    value = str(raw or "").strip()
+    shanghai = ZoneInfo("Asia/Shanghai")
+    match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日.*?(\d{1,2}):(\d{2})", value)
+    if match:
+        try:
+            return datetime(*(int(x) for x in match.groups()), tzinfo=shanghai).isoformat(timespec="seconds")
+        except ValueError:
+            return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        for fmt in ("%A, %B %d, %Y, %I:%M %p", "%a, %b %d, %Y, %I:%M %p",
+                    "%B %d, %Y, %I:%M %p", "%b %d, %Y, %I:%M %p",
+                    "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+            try:
+                parsed = datetime.strptime(value, fmt)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=shanghai)
+    return parsed.astimezone(shanghai).isoformat(timespec="seconds")
 
 
 def queued_emails() -> set[str]:
@@ -1627,7 +1716,8 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
         return {"ok": False, "reason": str(e)}
 
 
-def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str = "") -> dict:
+def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str = "",
+                        reply_at: str | None = None) -> dict:
     """把“回复时间”写回飞书（仅当该格为空，绝不覆盖 BD 手填值）。
 
     只写时间，不动“回复状态”——那是 BD 的人工判断列。
@@ -1649,7 +1739,10 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
     profile = (feishu.get("profile") or "tk-outreach-local").strip()
     if not base or not table:
         return {"ok": False, "reason": "feishu_not_configured"}
-    replied_at = format_shanghai_iso(time.time())
+    replied_at = (parse_gmail_reply_time(reply_at) if reply_at is not None
+                  else format_shanghai_iso(time.time()))
+    if not replied_at:
+        return {"ok": False, "reason": "gmail_reply_time_unreadable", "record_id": rid}
 
     def _cli(*args, cwd=None):
         return subprocess.run(
@@ -1699,14 +1792,32 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
             except Exception:
                 meta = {"raw": raw[:300]}
             ok = proc.returncode == 0 and not (isinstance(meta, dict) and meta.get("error"))
+            readback = ""
+            if ok:
+                check = _cli("+record-get", "--record-id", rid, "--field-id", "回复时间",
+                             "--format", "ndjson", "--output", "reply-check.ndjson", "--overwrite", cwd=td)
+                check_path = Path(td) / "reply-check.ndjson"
+                if check.returncode == 0 and check_path.is_file():
+                    for line in check_path.read_text(encoding="utf-8").splitlines():
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        val = rec.get("回复时间") if isinstance(rec, dict) else None
+                        if isinstance(val, list):
+                            val = ",".join(str(x.get("text") if isinstance(x, dict) else x) for x in val)
+                        readback = str(val or "").strip()
+                        break
+                ok = readback == replied_at
             LOGS.mkdir(parents=True, exist_ok=True)
             with (LOGS / "feishu-reply-writeback.log").open("a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "at": now_iso(), "mailbox": mailbox, "recipient": recipient,
                     "record_id": rid, "table_id": table, "fields": fields, "ok": ok,
-                    "returncode": proc.returncode,
+                    "returncode": proc.returncode, "readback_ok": readback == replied_at,
                 }, ensure_ascii=False) + "\n")
-            return {"ok": ok, "record_id": rid, "reply_time": replied_at, "table_id": table}
+            return {"ok": ok, "record_id": rid, "reply_time": replied_at,
+                    "table_id": table, "reason": None if ok else "reply_time_readback_failed"}
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 
@@ -2703,7 +2814,6 @@ class Handler(BaseHTTPRequestHandler):
                 scan = body.get("scan") or body
                 replies = scan.get("replies") or []
                 scanned_mb = (scan.get("mailbox") or mailbox or "").strip().lower()
-                replies_found = bool(scan.get("replies_found")) or bool(replies)
                 rows_seen = scan.get("inbox_rows") or []
                 if rows_seen:
                     # 收件箱首屏所有非本人邮件先落盘，便于按邮箱匹配“谁回了/谁退信”。
@@ -2714,46 +2824,76 @@ class Handler(BaseHTTPRequestHandler):
                             "job_id": scan.get("job_id") or "",
                             "row_count": len(rows_seen), "rows": rows_seen[:80],
                         }, ensure_ascii=False) + "\n")
-                notify = None
-                if replies_found:
-                    # Scaffold: Feishu group notify only when reply found (wire chat later).
-                    notify = {
-                        "queued": True,
-                        "channel": "feishu_group",
-                        "status": "scaffold",
-                        "mailbox": scanned_mb,
-                        "replies": replies[:20],
-                        "note": "Reply found — Feishu group notify placeholder (not sent yet)",
-                    }
-                    LOGS.mkdir(parents=True, exist_ok=True)
-                    with (LOGS / "reply-notify-scaffold.log").open("a", encoding="utf-8") as f:
-                        f.write(json.dumps({"at": now_iso(), **notify}, ensure_ascii=False) + "\n")
-
                 # 回写飞书“回复时间”：只认“这个号确实给它发过信”的来信。
                 # 退信/可疑拦截：由 classify_delivery_notice 单独写发送状态（不写回复时间）。
                 reply_writebacks = []
+                verified_replies = []
+                notifications = []
+                match_errors = []
                 bounce_writebacks = []
-                if replies_found and scanned_mb:
+                if scanned_mb:
                     c_rb = cfg()
                     acc_rb = find_account(c_rb, scanned_mb)
                     if acc_rb:
                         c_rb = cfg_for_account(c_rb, acc_rb)
-                    seen_from = set()
-                    for r in replies[:20]:
+                    seen_message = set()
+                    # The page sends every visible external sender. The server alone
+                    # decides whether it is a reply to this account's sent creator.
+                    for r in [*replies, *rows_seen, *(scan.get("spam_rows") or [])]:
+                        if not isinstance(r, dict):
+                            continue
                         frm = str(r.get("from") or "").strip().lower()
-                        if not frm or "@" not in frm or frm in seen_from:
+                        msg_key = str(r.get("message_id") or "").strip().lower() or (
+                            frm + "|" + str(r.get("at") or "") + "|" + str(r.get("snippet") or ""))
+                        if not frm or "@" not in frm or frm == scanned_mb or msg_key in seen_message:
+                            continue
+                        seen_message.add(msg_key)
+                        blob = " ".join(str(r.get(k) or "") for k in ("subject", "snippet"))
+                        if (_DAEMON_FROM_RE.search(frm) or
+                            re.search(r"no.?reply|do.?not.?reply|notification@|auto.?reply", frm, re.I) or
+                            re.search(r"automatic reply|auto.?reply|out of office|自动回复", blob, re.I) or
+                            classify_delivery_notice(frm=frm, subject=str(r.get("subject") or ""),
+                                                     snippet=str(r.get("snippet") or ""),
+                                                     bounce_kind=str(r.get("bounce_kind") or ""))):
                             continue
                         sent_job = find_sent_job(scanned_mb, frm)
+                        if not sent_job:
+                            try:
+                                sent_job = find_sent_record(c_rb, scanned_mb, frm)
+                            except Exception as e:
+                                match_errors.append(frm + ":" + type(e).__name__)
+                                continue
                         rid = str(sent_job.get("feishu_record_id") or "")
                         if not rid:
                             continue
-                        seen_from.add(frm)
+                        verified_replies.append(r)
+                        write_cfg = c_rb
+                        target_table = str(sent_job.get("feishu_table_id") or "").strip()
+                        if target_table and target_table != str((c_rb.get("feishu") or {}).get("table_id") or ""):
+                            write_cfg = dict(c_rb)
+                            write_cfg["feishu"] = {**dict(c_rb.get("feishu") or {}), "table_id": target_table}
                         # 可疑/垃圾邮件里的回信同样是回复：照常写回复时间，只做标记。
                         flagged = {"suspicious": bool(r.get("suspicious")), "spam": bool(r.get("spam"))}
                         try:
                             wb = mark_feishu_replied(
-                                c_rb, record_id=rid, mailbox=scanned_mb, recipient=frm)
-                            reply_writebacks.append({**wb, **flagged})
+                                write_cfg, record_id=rid, mailbox=scanned_mb,
+                                recipient=frm, reply_at=str(r.get("at") or ""))
+                            reply_writebacks.append({**wb, "recipient": frm, **flagged})
+                            if wb.get("ok"):
+                                historical = (scan.get("reason") != "remote_reply" and
+                                              is_historical_reply_notice(c_rb, str(wb.get("reply_time") or "")))
+                                if historical:
+                                    if not wb.get("skipped"):
+                                        notifications.append({"recipient": frm, "status": "historical_skipped",
+                                                              "reply_time": wb.get("reply_time")})
+                                elif r.get("body_verified") and str(r.get("body") or "").strip():
+                                    # A previous scan may have written reply time before Gmail loaded the body.
+                                    # Try again with the full body; the notification ledger prevents another send.
+                                    notice = notify_reply(c_rb, scanned_mb, r, sent_job)
+                                    if scan.get("reason") == "remote_reply" or notice.get("status") != "duplicate":
+                                        notifications.append({"recipient": frm, **notice})
+                                elif not wb.get("skipped"):
+                                    notifications.append({"recipient": frm, "status": "body_pending"})
                         except Exception as e:
                             reply_writebacks.append({"ok": False, "reason": str(e),
                                                      "recipient": frm, **flagged})
@@ -2765,6 +2905,11 @@ class Handler(BaseHTTPRequestHandler):
                                 "spam_rows": len(scan.get("spam_rows") or []),
                                 "results": reply_writebacks,
                             }, ensure_ascii=False) + "\n")
+                    if notifications or match_errors:
+                        with (LOGS / "reply-notify.log").open("a", encoding="utf-8") as f:
+                            f.write(json.dumps({"at": now_iso(), "mailbox": scanned_mb,
+                                                "notifications": notifications,
+                                                "match_errors": match_errors[:20]}, ensure_ascii=False) + "\n")
 
                 # 退信 / 可疑拦截：从 inbox_rows + replies + spam_rows 分类写回发送状态。
                 bounce_rows = []
@@ -2805,9 +2950,10 @@ class Handler(BaseHTTPRequestHandler):
                     switched = switch_after_inbox_scan(mailbox=scanned_mb or mailbox)
                 self._json(200, {
                     "ok": True,
-                    "replies_found": replies_found,
-                    "replies": replies[:20],
-                    "notify": notify,
+                    "replies_found": bool(verified_replies),
+                    "replies": verified_replies[:20],
+                    "notify": notifications,
+                    "match_errors": match_errors[:20],
                     "reply_writeback": reply_writebacks,
                     "bounce_writeback": bounce_writebacks,
                     "spam_rows": len(scan.get("spam_rows") or []),

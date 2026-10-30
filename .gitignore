@@ -4,14 +4,17 @@ data/jobs/*
 data/logs/*
 !data/logs/.gitkeep
 data/receipts/
+data/reply-notifications/
 data/queue-state.json
 data/sent-pace.jsonl
 data/*.jsonl
+data/reply-center-bridge.lock
 *.log
 *.log.*
 
 # Live secrets / local config (keep *.example.json)
 config/one-mailbox.json
+config/reply-relay-center.json
 config/multi-accounts.json
 config/one-mailbox.before-*
 .env

@@ -1,4 +1,5 @@
 import {ORIGIN} from './protocol.js';
+import {REPLY_RELAY_URL, REPLY_RELAY_KEY} from './relay-config.js';
 
 const el = id => document.getElementById(id);
 
@@ -645,7 +646,8 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const s = await chrome.storage.local.get(['config', 'current', 'lastResult', 'lastError']);
+    const s = await chrome.storage.local.get(['config', 'current', 'lastResult', 'lastError',
+      'replyRelayOutbox', 'replyRelayLastResult']);
     const a = activeAccount() || {};
     let health = '';
     try {
@@ -670,6 +672,10 @@ async function refresh() {
         + ' · 共 ' + accounts.length + ' 个账号',
       s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',
       (() => { const rs = s.config?.reply_scan || s.replyScanSettings || {}; const on = rs.enabled !== false; const m = Number(rs.interval_minutes) || 10; return '定期查回信：' + (on ? ('开 · 每 ' + m + ' 分钟') : '关'); })(),
+      REPLY_RELAY_URL && REPLY_RELAY_KEY ?
+        ('飞书群播报：中心端 · 待确认 ' + Object.keys(s.replyRelayOutbox || {}).length
+        + ' 条 · 最近 ' + (s.replyRelayLastResult?.status || '尚无回执')
+        + (s.replyRelayLastResult?.error ? ('（' + s.replyRelayLastResult.error + '）') : '')) : '',
       s.config?.sender ? '发件邮箱（会话）：' + s.config.sender : '',
       s.current ? '当前任务：' + s.current.job.recipient + ' · ' + (s.current.stage || s.current.phase) : '等待队列任务',
       s.lastResult?.message,
@@ -846,6 +852,9 @@ el('pause').onclick = async () => {
 
 
 async function boot() {
+  if (REPLY_RELAY_URL && REPLY_RELAY_KEY) {
+    if (el('reply-relay-mode')) el('reply-relay-mode').style.display = '';
+  }
   let loaded = null;
   try {
     await ensureLocalQueue();

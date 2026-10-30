@@ -1,0 +1,10 @@
+{
+  "name": "tk-send-reply-relay",
+  "main": "worker.mjs",
+  "account_id": "d7c991c802a060808a087df47823f3fa",
+  "compatibility_date": "2026-10-22",
+  "workers_dev": true,
+  "durable_objects": {"bindings": [{"name": "RELAY", "class_name": "ReplyRelay"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["ReplyRelay"]}],
+  "observability": {"enabled": false}
+}

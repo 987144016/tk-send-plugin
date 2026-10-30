@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.10",
-  "description": "Standalone Gmail web click-send. v0.3.10: fix Options schedule panel stuck loading; reply-scan interval persistence.",
+  "version": "0.3.16",
+  "description": "Standalone Gmail web click-send. v0.3.16: bounded reply detail tab and new-reply baseline.",
   "permissions": [
     "storage",
     "alarms",
@@ -13,7 +13,8 @@
   "host_permissions": [
     "https://mail.google.com/*",
     "https://accounts.google.com/*",
-    "http://127.0.0.1:8767/*"
+    "http://127.0.0.1:8767/*",
+    "https://tk-send-reply-relay.987144016.workers.dev/*"
   ],
   "background": {
     "service_worker": "background.js",

@@ -280,6 +280,57 @@ def _fetch_table_rows(feishu: dict, *, use_cache: bool, allow_stale: bool, timeo
         lk.release()
 
 
+def find_sent_record(c: dict, mailbox: str, recipient: str) -> dict:
+    """Find a sent creator in this mailbox's Feishu table, including older sends.
+
+    The standalone plugin's job files cover only sends made by this package.
+    Existing teammates' Feishu rows are the history for earlier senders.
+    """
+    mb = (mailbox or "").strip().lower()
+    rc = (recipient or "").strip().lower()
+    if not mb or not rc:
+        return {}
+    matches = []
+    tables = list(_configured_tables(c))
+    base_cfg = _feishu_cfg(c)
+    known_ids = {t["table_id"] for t in tables}
+    for table_id in c.get("reply_history_table_ids") or []:
+        if table_id in known_ids:
+            continue
+        known_ids.add(table_id)
+        tables.append({"base_token": base_cfg["base_token"], "table_id": table_id,
+                       "profile": base_cfg["profile"], "mailbox": "*", "history": True})
+    for table in tables:
+        if table["mailbox"] not in (mb, "*"):
+            continue
+        rows = _fetch_table_rows(table, use_cache=True, allow_stale=False, timeout=20)
+        for row in rows:
+            if _row_email(row) != rc:
+                continue
+            owner = _scalar(row.get("邮箱账号")).strip().lower()
+            if table.get("history") and owner != mb:
+                continue
+            if owner and owner != mb:
+                continue
+            status = _scalar(row.get("发送状态")).strip().lower()
+            sent_at = _row_last_send(row)
+            if status not in SENT_LIKE and sent_at is None:
+                continue
+            rid = str(row.get("record_id") or "").strip()
+            if rid:
+                matches.append((sent_at or datetime.min.replace(tzinfo=SH), {
+                    "feishu_record_id": rid,
+                    "feishu_table_id": table["table_id"],
+                    "recipient": rc,
+                    "sender": mb,
+                    "creator_name": _scalar(row.get("达人昵称") or row.get("达人名称")),
+                    "creator_id": _scalar(row.get("达人ID")),
+                }))
+    if not matches:
+        return {}
+    return max(matches, key=lambda item: item[0])[1]
+
+
 def _cross_recent_send_map(c: dict, *, use_cache: bool, allow_stale: bool, timeout: float | None) -> dict[str, datetime]:
     """email -> latest send datetime across ALL configured mailbox tables."""
     latest: dict[str, datetime] = {}

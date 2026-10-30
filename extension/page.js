@@ -35,12 +35,31 @@ export async function gmailPage(action,job){
   }
   const alerts=[...document.querySelectorAll('[role="alert"],[role="alertdialog"]')].map(text).join('\n');
   if(/reached.*limit.*sending|sending limit|已达到发送.*上限|已达到.*发送.*限额/i.test(alerts))return {error:'gmail_limit'};
+  if(action==='read_reply'){
+    const id=(job?.message_id||'').toLowerCase();
+    if(!/^[a-f0-9]{10,40}$/.test(id))return {error:'reply_message_id_missing'};
+    const message=[...document.querySelectorAll('[data-legacy-message-id]')]
+      .find(el=>(el.getAttribute('data-legacy-message-id')||'').toLowerCase()===id);
+    if(!message)return {waiting:true,stage:'等待 Gmail 回信正文显示'};
+    const from=(message.querySelector('[email]')?.getAttribute('email')||'').toLowerCase();
+    if(from!==(job?.recipient||'').toLowerCase())return {error:'wrong_reply_sender'};
+    const body=(message.querySelector('.a3s')?.innerText||'').trim();
+    if(!body)return {waiting:true,stage:'等待 Gmail 回信正文加载'};
+    return {verified:true,from,message_id:id,body};
+  }
+  if(action==='restore_unread'){
+    const control=[...document.querySelectorAll('[role="button"][aria-label]')]
+      .find(el=>/^(标记为未读|Mark as unread)$/i.test(el.getAttribute('aria-label')||''));
+    if(!control)return {error:'mark_unread_control_missing'};
+    control.click();
+    return {requested:true};
+  }
   const digest=async s=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)))].map(n=>n.toString(16).padStart(2,'0')).join('');
   const set=(e,value)=>{const setter=Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(e,value);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));};
   const compose=[...document.querySelectorAll('[role="dialog"]')].find(e=>e.querySelector('input[name="subjectbox"]'));
   const addressList=dialog=>[...new Set([...dialog.querySelectorAll('[email],[data-email],[data-hovercard-id]')].map(e=>e.getAttribute('email')||e.getAttribute('data-email')||e.getAttribute('data-hovercard-id')).filter(e=>/^[^\s@]+@[^\s@]+$/.test(e)).map(e=>e.toLowerCase()))];
   const bulk=job.recipient_mode==='bcc';
-  const expected=bulk?(job.recipients||[]).map(x=>x.toLowerCase()):[job.recipient.toLowerCase()];
+  const expected=bulk?(job.recipients||[]).map(x=>x.toLowerCase()):[(job.recipient||'').toLowerCase()];
   if(bulk&&(expected.length<1||expected.length>100||new Set(expected).size!==expected.length))return {error:'invalid_bcc_round'};
   const field=(root,kind)=>root?.querySelector('input[name="'+kind+'"],textarea[name="'+kind+'"]')||[...(root?.querySelectorAll('input[role="combobox"],input[peoplekit-id]')||[])].find(e=>{
     const label=e.getAttribute('aria-label')||'';
@@ -92,7 +111,6 @@ export async function gmailPage(action,job){
       await sleep(55+Math.random()*90);
       el.dispatchEvent(new PointerEvent('pointerup',{...base,pointerId:1,pointerType:'mouse',isPrimary:true,buttons:0}));
       el.dispatchEvent(new MouseEvent('mouseup',{...base,buttons:0}));
-      el.dispatchEvent(new MouseEvent('click',{...base,buttons:0}));
       try{el.click();}catch{}
       return true;
     };
@@ -112,7 +130,9 @@ export async function gmailPage(action,job){
     // 1) Prefer already-open account picker / list row (AccountChooser / gb menu)
     const rowSel='a,div[role="link"],div[role="button"],li,div[data-identifier],div[data-email],[data-email],[data-identifier],div[role="menuitem"],button,div[jsname]';
     const candidates=[...document.querySelectorAll(rowSel)].filter(visible);
-    const hit=candidates.find(e=>{
+    const exact=candidates.find(e=>
+      (e.getAttribute('data-email')||e.getAttribute('data-identifier')||'').toLowerCase()===wanted);
+    const hit=exact||candidates.find(e=>{
       const b=blobOf(e);
       if(!b.includes(wanted))return false;
       // Prefer the row that looks like an account entry, not the page chrome
@@ -122,9 +142,11 @@ export async function gmailPage(action,job){
       return b.includes(wanted);
     });
     if(hit){
+      const link=hit.closest('a');
+      if(link?.target==='_blank')link.target='_self';
       await humanClick(hit);
       document.documentElement.dataset.gmwSwitchPhase='clicked_row';
-      return {waiting:true,stage:'影刀式点击账号行 → '+wanted};
+      return {waiting:true,account_row_clicked:true,stage:'影刀式点击账号行 → '+wanted};
     }
     // 2) Open avatar / Google Account menu if picker not showing target
     const tries=Number(document.documentElement.dataset.gmwSwitchTries||'0');
@@ -383,9 +405,10 @@ export async function gmailPage(action,job){
     if(sender && wanted && sender!==wanted)
       return {error:'wrong_gmail_account_for_inbox_scan',current:sender,wanted};
     const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-    // Navigate hash to inbox if not already roughly there
+    // A thread, All Mail or a search can leave partial rows in the DOM.
+    // Scan only the actual inbox list for this Gmail tab.
     const hash=(location.hash||'').toLowerCase();
-    if(/#settings|#search\/|#sent|#drafts|#starred|#snoozed|#spam|#trash/i.test(hash)){
+    if(hash!=='#inbox'){
       const url=new URL(location.href);
       url.hash='inbox';
       location.href=url.href;
@@ -425,19 +448,29 @@ export async function gmailPage(action,job){
     const toRecord=row=>{
       const body=(row.innerText||'').trim();
       const blob=(body+' '+(row.getAttribute('aria-label')||'')).toLowerCase();
-      const emailEl=row.querySelector('[email],span[email]');
-      const from=(emailEl?.getAttribute('email')||'').toLowerCase();
+      // Conversation rows list participants in order ("me, creator"). The first
+      // [email] is often our own account, even when the latest text is a reply.
+      const participants=[...row.querySelectorAll('[email]')]
+        .map(el=>(el.getAttribute('email')||'').trim().toLowerCase())
+        .filter(Boolean);
+      const from=participants.findLast(email=>email!==wanted)||'';
       if(!from.includes('@')) return null;
-      if(wanted && from===wanted) return null;
-      const isUnread = row.classList.contains('zE') || !!row.querySelector('.yW span[email],.zF');
+      const identity=row.querySelector('[data-legacy-last-non-draft-message-id]');
+      const message_id=(identity?.getAttribute('data-legacy-last-non-draft-message-id')||'').toLowerCase();
+      const thread_id=(identity?.getAttribute('data-legacy-thread-id')||'').toLowerCase();
+      const thread_key=(identity?.getAttribute('data-thread-id')||'').replace(/^#/, '');
+      const isUnread = row.classList.contains('zE') || !!row.querySelector('.zF');
       const bounce_kind=classifyBounce(blob+' '+from);
       const failed_recipient=bounce_kind?failedRecipientFromText(blob):'';
       return {
         from,
-        subject:(body.split(String.fromCharCode(10))[0]||'').slice(0,120),
-        snippet:body.slice(0,220),
+        subject:(row.querySelector('.y6')?.textContent||body.split(String.fromCharCode(10))[0]||'').trim().slice(0,120),
+        snippet:(row.querySelector('.y2')?.innerText||body).trim().slice(0,220),
         unread:!!isUnread,
-        at:row.getAttribute('aria-label')||'',
+        at:row.querySelector('td.xW span[title]')?.getAttribute('title')||row.getAttribute('aria-label')||'',
+        message_id:message_id||undefined,
+        thread_id:thread_id||undefined,
+        thread_url:thread_key?(location.origin+location.pathname+'#all/'+thread_key):undefined,
         suspicious:suspiciousRe.test(blob),
         bounce_kind:bounce_kind||undefined,
         failed_recipient:failed_recipient||undefined,
@@ -451,7 +484,8 @@ export async function gmailPage(action,job){
       const blob=((row.innerText||'')+' '+(row.getAttribute('aria-label')||'')).toLowerCase();
       const looksReply = /回复|re:|答覆|answered/i.test(blob);
       const looksBounce = !!record.bounce_kind || /退信|delivery status|mailer-daemon|undeliverable|message blocked/i.test(blob);
-      if(matched || looksReply || looksBounce) replies.push({...record, matched, heuristic:!matched});
+      if(matched || looksReply || looksBounce || !record.bounce_kind)
+        replies.push({...record, matched, heuristic:!matched});
     }
     // 可疑/垃圾邮件里的回信：Gmail 常把“可疑”邮件直接丢进垃圾邮件标签。
     // 顺手扫一遍垃圾邮件箱，把里面的来信也带回去（点链接是 SPA 切换，不刷新页面）。
@@ -471,8 +505,7 @@ export async function gmailPage(action,job){
             record.spam=true;
             spamRows.push(record);
             const matched=!!recipient && record.from===recipient;
-            if(matched || suspiciousRe.test((row.innerText||'').toLowerCase()))
-              replies.push({...record, matched, heuristic:!matched});
+            replies.push({...record, matched, heuristic:!matched});
           }
           const inboxNav=[...document.querySelectorAll('a[href*="#inbox"], a[href*="/#inbox"]')].find(visible);
           if(inboxNav) inboxNav.click();

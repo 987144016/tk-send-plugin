@@ -1,5 +1,10 @@
 import {gmailPage} from './page.js';
 import {ORIGIN, accountURL, canClick, needsReconciliation, receiptMatches} from './protocol.js';
+import {REPLY_RELAY_URL, REPLY_RELAY_KEY} from './relay-config.js';
+import {captureReplyEvents, flushReplyEvents} from './reply-relay.mjs';
+import {ensureGmailAccountTabs} from './gmail-tabs.mjs';
+import {withReplyDetailTab, cleanupReplyDetailTab} from './reply-detail-tab.mjs';
+import {newReplyBodyCandidates, markReplyBodyRead} from './reply-body-baseline.mjs';
 
 const NATIVE_HOST = 'com.tk.outreach.sendqueue';
 let lastNativeEnsureAt = 0;
@@ -46,6 +51,21 @@ async function ensureQueueRunning() {
 
 
 let running = false, runningSince = 0, timer;
+let relayRunning = false;
+async function relayTick() {
+  if (!REPLY_RELAY_URL || !REPLY_RELAY_KEY || relayRunning) return;
+  relayRunning = true;
+  try { await flushReplyEvents(chrome.storage.local, REPLY_RELAY_URL, REPLY_RELAY_KEY); }
+  catch (e) { await chrome.storage.local.set({replyRelayLastResult: {
+    at: Date.now(), status: 'pending', error: e.message || String(e),
+  }}); }
+  finally { relayRunning = false; }
+}
+async function captureForRelay(mailbox, scan) {
+  if (!REPLY_RELAY_URL || !REPLY_RELAY_KEY) return;
+  await captureReplyEvents(chrome.storage.local, mailbox, scan);
+  relayTick();
+}
 const read = () => chrome.storage.local.get(
   ['config', 'current', 'client_id', 'inboxScanPending', 'rrIndex', 'slotCooldown', 'lastReplyScanAt', 'replyScanSettings']);
 const save = current => chrome.storage.local.set({current});
@@ -60,10 +80,10 @@ const MAIL_TAB_URL = 'https://mail.google.com/*';
 const tabMailboxCache = new Map();   // tabId -> {mailbox, url, at}
 const COOLDOWN_MS = 60000;
 
-async function readTabMailbox(tabId, url) {
+async function readTabMailbox(tabId, url, fresh = false) {
   if (!url || !url.startsWith('https://mail.google.com/')) return '';
   const c = tabMailboxCache.get(tabId);
-  if (c && c.url === url && Date.now() - c.at < 60000) return c.mailbox;
+  if (!fresh && c && c.url === url && Date.now() - c.at < 60000) return c.mailbox;
   try {
     const [shot] = await chrome.scripting.executeScript({
       target: {tabId},
@@ -91,7 +111,8 @@ async function readTabMailbox(tabId, url) {
 
 async function listGmailSlots() {
   const tabs = await chrome.tabs.query({url: MAIL_TAB_URL});
-  const live = tabs.filter(t => !t.discarded);
+  const provisioning = (await chrome.storage.local.get('gmailAccountProvision')).gmailAccountProvision;
+  const live = tabs.filter(t => !t.discarded && t.id !== provisioning?.tabId);
   const slots = [];
   for (const t of live) {
     const mailbox = await readTabMailbox(t.id, t.url || '');
@@ -105,6 +126,32 @@ async function listGmailSlots() {
     if (mb) slots.push({tabId: t.id, windowId: t.windowId, mailbox: mb, url: t.url || '', status: t.status});
   }
   return slots;
+}
+
+async function configuredMailboxes() {
+  const saved = await chrome.storage.local.get(['accounts', 'settings']);
+  let accounts = Array.isArray(saved.accounts) && saved.accounts.length
+    ? saved.accounts : saved.settings?.accounts;
+  if (!Array.isArray(accounts) || !accounts.length) {
+    const response = await fetch(ORIGIN + '/api/config', {signal: AbortSignal.timeout(4000)});
+    if (!response.ok) return [];
+    accounts = (await response.json()).settings?.accounts || [];
+  }
+  return accounts.map(a => String(a?.mailbox || '').trim().toLowerCase())
+    .filter(x => /^[^\s@]+@gmail\.com$/.test(x));
+}
+
+async function ensureConfiguredGmailTabs() {
+  const mailboxes = await configuredMailboxes();
+  if (!mailboxes.length) return;
+  const result = await ensureGmailAccountTabs(chrome, mailboxes, readTabMailbox,
+    (tabId, target) => page({tabId, job: {sender: target}}, 'switch_account'));
+  if (result.status === 'slot_limit')
+    await chrome.storage.local.set({lastError: {at: Date.now(), message:
+      'Gmail 标签页数量已达账号数，但缺少 ' + result.mailbox + '：请关闭重复账号标签页'}});
+  if (result.status === 'attention')
+    await chrome.storage.local.set({lastError: {at: Date.now(), message:
+      '自动切换 Gmail 账号未完成：' + result.mailbox + '（' + result.reason + '）'}});
 }
 
 function slotCooling(slotCooldown, tabId) {
@@ -165,7 +212,7 @@ async function api(token, name, body, _retried) {
     method: 'POST',
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + token},
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(12000),
+    signal: AbortSignal.timeout(name === 'inbox_scan' ? 120000 : 12000),
   });
   const data = await r.json();
   if (r.status === 401 && !_retried) {
@@ -253,6 +300,47 @@ async function page(current, action) {
   }
   if (result.error && !result.waiting && !result.switched) throw Error(result.error);
   return result;
+}
+
+async function enrichReplyBodies(slot, scan) {
+  const fresh = await newReplyBodyCandidates(chrome.storage.local, slot.mailbox, scan?.replies || []);
+  const candidates = fresh.filter(r =>
+    r?.message_id && /^https:\/\/mail\.google\.com\//.test(r.thread_url || '')
+    && !r.bounce_kind && !/mailer-daemon|postmaster|no.?reply|notification@/i.test(r.from || '')
+  ).slice(0, 12);
+  if (!candidates.length) return scan;
+  return (await withReplyDetailTab(chrome, candidates[0].thread_url, async ({tabId, navigate}) => {
+    for (let i = 0; i < candidates.length; i++) {
+      const r = candidates[i];
+      if (i) await navigate(r.thread_url);
+      const target = {tabId, job: {
+        sender: slot.mailbox, recipient: r.from, message_id: r.message_id,
+      }};
+      let detail = null;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 750));
+        try { detail = await page(target, 'read_reply'); }
+        catch { detail = null; }
+        if (detail?.verified) break;
+        if (detail?.error && !detail?.waiting) break;
+      }
+      if (!detail?.verified) continue;
+      await markReplyBodyRead(chrome.storage.local, slot.mailbox, r.message_id);
+      for (const list of [scan.replies, scan.inbox_rows, scan.spam_rows]) {
+        for (const item of (list || [])) {
+          if (item.message_id === r.message_id && item.from === r.from) {
+            item.body = detail.body;
+            item.body_verified = true;
+          }
+        }
+      }
+      if (r.unread) {
+        try { await page(target, 'restore_unread'); }
+        catch (e) { scan.diagnostics = {...(scan.diagnostics || {}), unread_restore_error: e.message}; }
+      }
+    }
+    return scan;
+  })) || scan;
 }
 
 /** Tabs only: 只用与任务绑定的那个标签页；不切号、不新建窗口。 */
@@ -366,29 +454,29 @@ async function finish(config, current) {
   let switchedTo = '';
   let scanNote = '';
   if (fin && fin.need_inbox_scan && current.receipt?.status === 'sent') {
+    const deferScan = async (message) => chrome.storage.local.set({
+      inboxScanPending: {
+        at: Date.now(), mailbox: current.job.sender, recipient: current.job.recipient,
+        marker: current.job.marker, job_id: current.job.job_id,
+        token: config.token, tabId: current.tabId || null,
+      },
+      current: null,
+      lastResult: {at: Date.now(), message},
+    });
     try {
       // Ensure we are still on the sending mailbox tab before scanning.
       if (!await ownTab(current)) {
         // Tab not ready; keep a soft pending so next tick can retry scan via storage flag.
-        await chrome.storage.local.set({
-          inboxScanPending: {
-            at: Date.now(),
-            mailbox: current.job.sender,
-            recipient: current.job.recipient,
-            marker: current.job.marker,
-            job_id: current.job.job_id,
-            token: config.token,
-            tabId: current.tabId || null,
-          },
-          current: null,
-          lastResult: {
-            at: Date.now(),
-            message: '已发送；等待 Gmail 标签页就绪后扫描收件箱（切号前）',
-          },
-        });
+        await deferScan('已发送；等待 Gmail 标签页就绪后扫描收件箱');
         return;
       }
-      const scan = await page(current, 'scan_inbox');
+      let scan = await page(current, 'scan_inbox');
+      if (!scan?.scanned) {
+        await deferScan('已发送；Gmail 收件箱尚未就绪，稍后补扫');
+        return;
+      }
+      scan = await enrichReplyBodies({mailbox: current.job.sender}, scan);
+      await captureForRelay(current.job.sender, scan);
       const scanBody = {
         mailbox: current.job.sender,
         recipient: current.job.recipient,
@@ -396,6 +484,8 @@ async function finish(config, current) {
         job_id: current.job.job_id,
         replies_found: !!(scan && (scan.replies_found || (scan.replies || []).length)),
         replies: (scan && scan.replies) || [],
+        inbox_rows: (scan && scan.inbox_rows) || [],
+        spam_rows: (scan && scan.spam_rows) || [],
         stage: (scan && scan.stage) || '',
         diagnostics: (scan && scan.diagnostics) || {},
         no_switch: true,   // 多标签页模式：发完只扫本号收件箱，不切号
@@ -421,21 +511,8 @@ async function finish(config, current) {
       else if (fin.writeback && fin.writeback.ok)
         scanNote += ' · 飞书已写回发送状态';
     } catch (e) {
-      try {
-        await api(config.token, 'inbox_scan', {
-          scan: {
-            mailbox: current.job.sender,
-            recipient: current.job.recipient,
-            marker: current.job.marker,
-            job_id: current.job.job_id,
-            replies_found: false,
-            replies: [],
-            error: e.message,
-            no_switch: true,
-          },
-        });
-      } catch {}
-      scanNote = ' · 收件箱扫描失败:' + e.message;
+      await deferScan('收件箱扫描失败，稍后补扫：' + e.message);
+      return;
     }
   }
   const msg = current.receipt.status === 'sent'
@@ -475,8 +552,8 @@ async function maybePeriodicReplyScan(config, stored) {
       await reportDiag(config, 'reply_scan_no_gmail_slot');
       return;
     }
-    await chrome.storage.local.set({lastReplyScanAt: Date.now()});
     const notes = [];
+    let incomplete = false;
     for (const slot of slots) {
       const fake = {
         tabId: slot.tabId,
@@ -485,6 +562,7 @@ async function maybePeriodicReplyScan(config, stored) {
       try {
         if (!(await ownTab(fake))) {
           notes.push(slot.mailbox + '=tab_unusable');
+          incomplete = true;
           continue;
         }
         let scan = await page(fake, 'scan_inbox');
@@ -492,10 +570,13 @@ async function maybePeriodicReplyScan(config, stored) {
           await new Promise(r => setTimeout(r, 2800));
           scan = await page(fake, 'scan_inbox');
         }
-        if (scan?.error) {
-          notes.push(slot.mailbox + '=' + scan.error);
+        if (!scan?.scanned) {
+          notes.push(slot.mailbox + '=' + (scan?.error || scan?.stage || 'not_ready'));
+          incomplete = true;
           continue;
         }
+        scan = await enrichReplyBodies(slot, scan);
+        await captureForRelay(slot.mailbox, scan);
         const scanned = await api(config.token, 'inbox_scan', {
           scan: {
             mailbox: slot.mailbox,
@@ -521,8 +602,12 @@ async function maybePeriodicReplyScan(config, stored) {
         );
       } catch (e) {
         notes.push(slot.mailbox + '=err:' + (e.message || e));
+        incomplete = true;
       }
     }
+    // A loading mailbox is not a completed scan. Retry after one minute,
+    // while fully completed rounds honor the configured interval.
+    await chrome.storage.local.set({lastReplyScanAt: incomplete ? Date.now() - gapMs + 60000 : Date.now()});
     await reportDiag(config, 'periodic_reply_scan', {notes: notes.slice(0, 8), interval_minutes: rs.interval_minutes});
     await chrome.storage.local.set({
       lastResult: {at: Date.now(), message: '定期查回信完成 · ' + notes.join(' · ')},
@@ -561,7 +646,10 @@ async function tick() {
       };
       try {
         if (await ownTab(fake)) {
-          const scan = await page(fake, 'scan_inbox');
+          let scan = await page(fake, 'scan_inbox');
+          if (!scan?.scanned) return;
+          scan = await enrichReplyBodies({mailbox: pendingScan.mailbox}, scan);
+          await captureForRelay(pendingScan.mailbox, scan);
           const scanned = await api(config.token, 'inbox_scan', {
             scan: {
               mailbox: pendingScan.mailbox,
@@ -570,6 +658,8 @@ async function tick() {
               job_id: pendingScan.job_id,
               replies_found: !!(scan && (scan.replies_found || (scan.replies || []).length)),
               replies: (scan && scan.replies) || [],
+              inbox_rows: (scan && scan.inbox_rows) || [],
+              spam_rows: (scan && scan.spam_rows) || [],
               no_switch: true,
             },
           });
@@ -597,6 +687,8 @@ async function tick() {
     }
     // 定期查回信：与「扩展发送 enabled」解耦；暂停发信仍可扫。
     if (!current && config?.token) {
+      try { await ensureConfiguredGmailTabs(); }
+      catch (e) { await reportDiag(config, 'gmail_tab_setup: ' + (e.message || e)); }
       await maybePeriodicReplyScan(config, stored);
       stored = await read();
       config = stored.config || config;
@@ -607,7 +699,7 @@ async function tick() {
       const slots = await listGmailSlots();
       if (!slots.length) {
         await chrome.storage.local.set({
-          lastError: {at: Date.now(), message: '没有可用 Gmail 标签页：每个谷歌账号各开一个 mail.google.com 标签页并登录'},
+          lastError: {at: Date.now(), message: '等待插件打开并登录 Gmail 账号标签页'},
         });
         await reportDiag(config, 'no_gmail_slot');
         return;
@@ -750,11 +842,10 @@ async function tick() {
   }
 }
 
-chrome.alarms.onAlarm.addListener(a => { if (a.name === 'send-plugin-heartbeat') tick(); });
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'send-plugin-heartbeat') { tick(); relayTick(); } });
 chrome.runtime.onInstalled.addListener(() => chrome.alarms.create('send-plugin-heartbeat', {periodInMinutes: 0.5}));
 chrome.runtime.onStartup.addListener(async () => {
   await chrome.alarms.create('send-plugin-heartbeat', {periodInMinutes: 0.5});
-  tick();
 });
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
@@ -780,4 +871,4 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
 });
 chrome.alarms.create('send-plugin-heartbeat', {periodInMinutes: 0.5});
-tick();
+cleanupReplyDetailTab(chrome).catch(() => {}).finally(() => { tick(); relayTick(); });

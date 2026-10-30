@@ -1,0 +1,4 @@
+{
+  "relay_url": "https://tk-send-reply-relay.example.workers.dev",
+  "host_key": "set only on the owner's computer"
+}

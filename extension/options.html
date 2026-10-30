@@ -46,7 +46,7 @@ input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf
 <main>
 <p class="hint" id="update-hint">队列启动时会自动 <code>git pull</code>（仅 git clone）。拉代码后请到 <code>chrome://extensions</code> <strong>重新加载</strong>本扩展，否则新 JS 不会生效。手动兜底：包根目录 <code>Update-SendPlugin.ps1</code>。</p>
 <h1>TK Send Plugin · Gmail Web（多账号）</h1>
-<p class="warn">一点即运行。发信 = Gmail <strong>网页点击</strong>。禁止 Gmail API / 远程调试 / 新开 Chrome。<strong>不要工作台、识别码、配对码</strong>。每邮箱只用<strong>自己的</strong>模板；禁止跨号。<strong>一人多号：每个 Gmail 标签页各自登录一个账号，扩展只领本页签登录号的任务，不再点头像切号</strong>；多个页签按顺序发。「立即发送（按Y人密送一封测发）」对每个剩余>0的账号入队<strong>1封密送</strong>，密送栏一次粘贴Y个邮箱（Y=「一次发多少人」；剩余=0跳过）。每个号发完先写飞书，再扫同号收件箱（含垃圾/可疑邮件）回写回复时间。<strong>节奏设置：「一次发多少人」= 这一批最多发几个人，发满就停，隔「批次间隔」分钟再发下一批；填 0 = 暂时禁用本号（不入队/立即发送跳过）</strong>。禁止一次性群发全部。</p>
+<p class="warn">一点即运行。发信 = Gmail <strong>网页点击</strong>。禁止 Gmail API / 远程调试 / 新开 Chrome。<strong>不要工作台、识别码、配对码</strong>。每邮箱只用<strong>自己的</strong>模板；禁止跨号。<strong>一人多号：至少打开一个已登录 Gmail 页签；插件补开缺失账号页签并点击头像切号，确认后各页签只领本账号任务</strong>；多个页签按顺序发。「立即发送（按Y人密送一封测发）」对每个剩余>0的账号入队<strong>1封密送</strong>，密送栏一次粘贴Y个邮箱（Y=「一次发多少人」；剩余=0跳过）。每个号发完先写飞书，再扫同号收件箱（含垃圾/可疑邮件）回写回复时间。<strong>节奏设置：「一次发多少人」= 这一批最多发几个人，发满就停，隔「批次间隔」分钟再发下一批；填 0 = 暂时禁用本号（不入队/立即发送跳过）</strong>。禁止一次性群发全部。</p>
 
 <h2>账号列表 <span class="hint" style="font-weight:400">（可添加 / 删除；点「设为当前」切换 active）</span></h2>
 <div id="accounts"></div>
@@ -55,7 +55,7 @@ input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf
 </div>
 
 <p>当前发件号（active）：<span id="active-label">—</span>
-  · 策略：<strong>每个 Gmail 标签页固定自己的账号</strong>（扩展按页签登录号领任务，不切号）</p>
+  · 策略：<strong>插件自动补齐缺少的账号页签</strong>（每页固定账号，按实际登录号领任务）</p>
 <p class="hint" id="active-ux-hint">active = 新建任务默认归属的邮箱。面板下方列出每个账号的下一批时间 / 人数 / 剩余。</p>
 
 <div class="row">
@@ -77,6 +77,8 @@ input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf
     <label for="reply-scan-interval">查回信间隔（分钟）</label>
     <input id="reply-scan-interval" type="number" min="3" max="180" value="10">
   </div>
+  <hr style="border:none;border-top:1px solid #c5d5cf;margin:12px 0">
+  <p class="hint" id="reply-relay-mode" style="display:none">群播报由中心电脑统一处理；本机离线事件会保留，等中心上线自动补播。</p>
 </div>
 
 <h2>发信排程（双账号）</h2>

@@ -43,6 +43,14 @@
     "reuse_existing_gmail_tab": true
   },
   "token": "gmw_standalone_phase1_change_me_to_random_43chars___________",
+  "reply_scan": {"enabled": true, "interval_minutes": 10},
+  "reply_notify": {
+    "enabled": false,
+    "chat_id": "",
+    "profile": "tk-outreach-local",
+    "start_after": ""
+  },
+  "reply_history_table_ids": [],
   "feishu": {
     "table_name": "达人·test",
     "table_id": "tblh3s12ihno8jEi",
