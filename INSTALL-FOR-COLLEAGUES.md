@@ -1,6 +1,6 @@
-# TK Send Plugin 0.3.20 — Windows 同事安装
+# TK Send Plugin 0.3.21 — Windows 同事安装
 
-使用私有的 `TK-Send-Team-v0.3.20-*.zip` 完整包。旧的扩展单包没有本地队列或 Native Host，无法独立运行。
+使用私有的 `TK-Send-Team-v0.3.21-*.zip` 完整包。旧的扩展单包没有本地队列或 Native Host，无法独立运行。
 
 1. 解压完整 ZIP，保留目录结构。
 2. Chrome `chrome://extensions` → 开发者模式 → 加载已解压的扩展程序 → 选择**包内 `extension` 子文件夹**。

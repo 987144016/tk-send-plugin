@@ -37,6 +37,7 @@ foreach ($name in @('Bootstrap-Team.ps1','Install-NativeHost.ps1','Start-LocalQu
   Copy-Item -LiteralPath (Join-Path $Root ('scripts\' + $name)) -Destination (Join-Path $out 'scripts')
 }
 Copy-Item -LiteralPath (Join-Path $Root '一点即运行-发信插件.cmd') -Destination $out
+Copy-Item -LiteralPath (Join-Path $Root 'VERSION') -Destination $out
 Copy-Item -LiteralPath (Join-Path $Root 'config\one-mailbox.example.json') -Destination (Join-Path $out 'config')
 $teamConfig = Get-Content -LiteralPath (Join-Path $Root 'config\one-mailbox.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $teamConfig.armed = $true

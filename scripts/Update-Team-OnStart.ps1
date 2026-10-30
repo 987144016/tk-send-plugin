@@ -24,8 +24,11 @@ try {
     $zip = [IO.Path]::GetFullPath($SourceZip)
     if (-not (Test-Path -LiteralPath $zip)) { throw 'Local test update ZIP missing.' }
   } else {
-    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $manifestUrl = 'https://raw.githubusercontent.com/987144016/tk-send-plugin/main/extension/manifest.json?t=' + $stamp
+    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $commitUrl = 'https://api.github.com/repos/987144016/tk-send-plugin/commits/main?t=' + $stamp
+    $commit = Invoke-RestMethod -Uri $commitUrl -Headers @{'User-Agent'='TK-Send-Plugin';'Cache-Control'='no-cache'} -TimeoutSec 12
+    if ([string]$commit.sha -notmatch '^[a-f0-9]{40}$') { throw 'GitHub did not return a commit SHA.' }
+    $manifestUrl = 'https://raw.githubusercontent.com/987144016/tk-send-plugin/' + $commit.sha + '/extension/manifest.json'
     $remote = Invoke-RestMethod -Uri $manifestUrl -TimeoutSec 12
     if ([version]$remote.version -le [version]$localManifest.version) {
       Record ('already current: ' + $localManifest.version)
@@ -33,7 +36,7 @@ try {
       exit 0
     }
     $zip = Join-Path (Split-Path -Parent $stage) 'main.zip'
-    Invoke-WebRequest -Uri 'https://codeload.github.com/987144016/tk-send-plugin/zip/refs/heads/main' `
+    Invoke-WebRequest -Uri ('https://codeload.github.com/987144016/tk-send-plugin/zip/' + $commit.sha) `
       -OutFile $zip -TimeoutSec 45 -UseBasicParsing
   }
   Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
