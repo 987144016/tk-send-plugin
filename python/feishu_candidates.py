@@ -62,13 +62,19 @@ def _lark_exe() -> Path:
 
 
 try:
-    from feishu_cli import relay_enabled, run_lark
+    from feishu_cli import relay_enabled, direct_enabled, run_lark
 except ImportError:  # pragma: no cover
-    from python.feishu_cli import relay_enabled, run_lark  # type: ignore
+    from python.feishu_cli import relay_enabled, direct_enabled, run_lark  # type: ignore
 
 
 def _feishu_cfg(c: dict) -> dict:
     feishu = dict(c.get("feishu") or {})
+    if direct_enabled():
+        try:
+            from feishu_direct import config as direct_config
+        except ImportError:  # pragma: no cover
+            from python.feishu_direct import config as direct_config  # type: ignore
+        feishu["base_token"] = str(direct_config().get("base_token") or "").strip()
     if not feishu.get("base_token") or not feishu.get("table_id"):
         root = Path(__file__).resolve().parents[2]  # tiktok-outreach
         cfg_path = root / "config.yaml"
@@ -197,7 +203,7 @@ def _configured_tables(c: dict) -> list[dict]:
 
 def _list_records(feishu: dict, *, timeout: float = LIST_TIMEOUT_SEC) -> list[dict]:
     exe = _lark_exe()
-    if not exe.is_file() and not relay_enabled():
+    if not exe.is_file() and not relay_enabled() and not direct_enabled():
         raise RuntimeError("未找到飞书官方 CLI（lark-cli）")
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()

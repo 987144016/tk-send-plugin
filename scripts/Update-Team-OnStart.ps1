@@ -2,7 +2,7 @@ param([string]$SourceZip = '')
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $logDir = Join-Path $Root 'data\logs'
-$stage = Join-Path $Root 'data\updates\latest'
+$stage = Join-Path $Root ('data\updates\stage-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $log = Join-Path $logDir 'team-update.log'
@@ -62,7 +62,7 @@ try {
   $extFrom = Join-Path $source.FullName 'extension'
   $extTo = Join-Path $Root 'extension'
   Get-ChildItem -LiteralPath $extFrom -File | Where-Object {
-    $_.Name -notin @('manifest.json','relay-config.js')
+    $_.Name -notin @('manifest.json','team-feishu.json')
   } | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $extTo -Force }
   Copy-Item -LiteralPath (Join-Path $extFrom 'manifest.json') -Destination $extTo -Force
   if (Test-Path -LiteralPath (Join-Path $source.FullName 'VERSION')) {

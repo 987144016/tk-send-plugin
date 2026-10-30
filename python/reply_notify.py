@@ -26,6 +26,12 @@ def _save(path: Path, value: dict) -> None:
 
 
 def _send_lark(settings: dict, key: str, body: str) -> dict:
+    try:
+        from feishu_direct import enabled as direct_enabled, send_group_text
+    except ImportError:  # pragma: no cover
+        from python.feishu_direct import enabled as direct_enabled, send_group_text  # type: ignore
+    if direct_enabled():
+        return send_group_text(settings["chat_id"], body, key)
     exe = Path(os.environ.get("APPDATA", "")) / "npm/node_modules/@larksuite/cli/bin/lark-cli.exe"
     if not exe.is_file():
         raise FileNotFoundError("lark_cli_missing")

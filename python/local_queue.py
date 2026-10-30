@@ -50,9 +50,9 @@ except ImportError:  # pragma: no cover
     from python.reply_notify import notify_reply  # type: ignore
 
 try:
-    from feishu_cli import relay_enabled, run_lark
+    from feishu_cli import relay_enabled, direct_enabled, run_lark
 except ImportError:  # pragma: no cover
-    from python.feishu_cli import relay_enabled, run_lark  # type: ignore
+    from python.feishu_cli import relay_enabled, direct_enabled, run_lark  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "one-mailbox.json"
@@ -88,7 +88,20 @@ def save_json(path: Path, value: Any) -> None:
 
 
 def cfg() -> dict:
-    return load_json(DEFAULT_CONFIG, {})
+    c = load_json(DEFAULT_CONFIG, {})
+    if direct_enabled():
+        try:
+            from feishu_direct import config as direct_config
+        except ImportError:  # pragma: no cover
+            from python.feishu_direct import config as direct_config  # type: ignore
+        private = direct_config()
+        c["feishu"] = {**(c.get("feishu") or {}), "base_token": private["base_token"]}
+        if private.get("chat_id"):
+            c["reply_notify"] = {**(c.get("reply_notify") or {}),
+                "enabled": bool(private.get("notify_enabled", False)),
+                "chat_id": str(private["chat_id"]),
+                "start_after": str(private.get("notify_start_after") or "")}
+    return c
 
 
 
@@ -1662,7 +1675,7 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file() and not relay_enabled():
+    if not exe.is_file() and not relay_enabled() and not direct_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -1777,7 +1790,7 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file() and not relay_enabled():
+    if not exe.is_file() and not relay_enabled() and not direct_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -1960,7 +1973,7 @@ def mark_feishu_delivery_status(
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file() and not relay_enabled():
+    if not exe.is_file() and not relay_enabled() and not direct_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -3049,7 +3062,7 @@ def main() -> None:
     print(f"[send-plugin] pending jobs={len(list_pending())} — schedule clock auto-enqueues BCC by pace X/Y when enabled")
     start_schedule_enqueue_clock()
     print(f"[send-plugin] schedule-enqueue clock started (tick={SCHEDULE_TICK_SECONDS}s)")
-    if (ROOT / 'config' / 'reply-relay-center.json').is_file():
+    if not direct_enabled() and (ROOT / 'config' / 'reply-relay-center.json').is_file():
         try:
             from reply_center_bridge import main as run_reply_center
         except ImportError:  # pragma: no cover

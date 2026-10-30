@@ -16,6 +16,7 @@ data/reply-center-bridge.lock
 config/one-mailbox.json
 config/reply-relay-center.json
 config/team-relay.json
+extension/team-feishu.json
 config/multi-accounts.json
 config/one-mailbox.before-*
 .env

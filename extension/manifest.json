@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.21",
-  "description": "Standalone Gmail web click-send. v0.3.21: commit-pinned GitHub updater and safe native-host script.",
+  "version": "0.3.22",
+  "description": "Standalone Gmail web click-send. v0.3.22: private file for direct Feishu and GitHub updates.",
   "permissions": [
     "storage",
     "alarms",
@@ -13,8 +13,7 @@
   "host_permissions": [
     "https://mail.google.com/*",
     "https://accounts.google.com/*",
-    "http://127.0.0.1:8767/*",
-    "https://tk-send-reply-relay.987144016.workers.dev/*"
+    "http://127.0.0.1:8767/*"
   ],
   "background": {
     "service_worker": "background.js",

@@ -4,17 +4,6 @@
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Private = Join-Path $Root 'config\reply-relay-center.json'
-$OwnerConfig = Join-Path $Root 'config\one-mailbox.json'
-if (-not (Test-Path -LiteralPath $Private) -or -not (Test-Path -LiteralPath $OwnerConfig)) {
-  throw 'Owner relay and Feishu table configuration are required to build the private team package.'
-}
-$relay = Get-Content -LiteralPath $Private -Raw -Encoding UTF8 | ConvertFrom-Json
-$owner = Get-Content -LiteralPath $OwnerConfig -Raw -Encoding UTF8 | ConvertFrom-Json
-if (-not $relay.relay_url -or -not $relay.client_key -or
-    -not $owner.feishu.base_token -or -not $owner.feishu.table_id) {
-  throw 'Relay client key or shared Feishu table ID is missing.'
-}
 if (-not (Test-Path -LiteralPath (Join-Path $PythonRuntime 'pythonw.exe'))) {
   throw "Bundled Python runtime not found: $PythonRuntime"
 }
@@ -26,7 +15,12 @@ New-Item -ItemType Directory -Path $out | Out-Null
 foreach ($name in @('extension','python','native-host','scripts','config','runtime','data\jobs','data\logs')) {
   New-Item -ItemType Directory -Path (Join-Path $out $name) -Force | Out-Null
 }
-Copy-Item -Path (Join-Path $Root 'extension\*') -Destination (Join-Path $out 'extension') -Recurse
+Get-ChildItem -LiteralPath (Join-Path $Root 'extension') -File | Where-Object {
+  $_.Name -notin @('team-feishu.json','relay-config.js')
+} | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $out 'extension') }
+$utf8 = New-Object Text.UTF8Encoding($false)
+[IO.File]::WriteAllText((Join-Path $out 'extension\relay-config.js'),
+  "export const REPLY_RELAY_URL = '';`nexport const REPLY_RELAY_KEY = '';`n", $utf8)
 Copy-Item -Path (Join-Path $Root 'python\*.py') -Destination (Join-Path $out 'python')
 foreach ($name in @('tk_send_queue_host.py','tk_send_queue_host.bat')) {
   Copy-Item -LiteralPath (Join-Path $Root ('native-host\' + $name)) -Destination (Join-Path $out 'native-host')
@@ -41,20 +35,8 @@ Copy-Item -LiteralPath (Join-Path $Root 'VERSION') -Destination $out
 Copy-Item -LiteralPath (Join-Path $Root 'config\one-mailbox.example.json') -Destination (Join-Path $out 'config')
 $teamConfig = Get-Content -LiteralPath (Join-Path $Root 'config\one-mailbox.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $teamConfig.armed = $true
-$teamConfig.feishu.base_token = [string]$owner.feishu.base_token
-$teamConfig.feishu.table_id = ''
-$teamConfig.feishu.table_name = ''
-$teamConfig.subject = [string]$owner.subject
-$utf8 = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $out 'config\one-mailbox.json'),
   ($teamConfig | ConvertTo-Json -Depth 12), $utf8)
-$client = @{relay_url=[string]$relay.relay_url;client_key=[string]$relay.client_key}
-[IO.File]::WriteAllText((Join-Path $out 'config\team-relay.json'),
-  ($client | ConvertTo-Json -Depth 4), $utf8)
-$url = ConvertTo-Json -InputObject ([string]$relay.relay_url) -Compress
-$key = ConvertTo-Json -InputObject ([string]$relay.client_key) -Compress
-[IO.File]::WriteAllText((Join-Path $out 'extension\relay-config.js'),
-  "export const REPLY_RELAY_URL = $url;`nexport const REPLY_RELAY_KEY = $key;`n", $utf8)
 foreach ($name in @('Lib','DLLs')) {
   Copy-Item -LiteralPath (Join-Path $PythonRuntime $name) -Destination (Join-Path $out 'runtime') -Recurse
 }
@@ -70,13 +52,14 @@ $guide = @'
 TK Send Plugin 团队版安装（Windows + Chrome）
 
 1. 解压整个 ZIP，保留文件夹结构。不要只拿 extension 文件夹。
-2. Chrome 打开 chrome://extensions，开启开发者模式，加载已解压的扩展程序：选择本包的 extension 子文件夹（里面有 manifest.json）。
-3. 双击包根目录的「一点即运行-发信插件.cmd」。成功时无黑色常驻窗口；失败会弹出具体原因，日志在 data\logs\setup-result.txt。
-4. 点击插件图标打开选项，填自己的 Gmail、自己的 Gmail 模板名称、自己数据表的 table_id（tbl 开头）。保存参数，点「连接并启动」。不要填他人的 Gmail 或表。
+2. 把管理员单独发的 team-feishu.json 放进本包 extension 子文件夹，与 manifest.json 同级。以后更新会保留它。
+3. Chrome 打开 chrome://extensions，开启开发者模式，加载已解压的扩展程序：选择本包的 extension 子文件夹。
+4. 双击包根目录的「一点即运行-发信插件.cmd」。成功时无黑色常驻窗口；失败会弹出具体原因，日志在 data\logs\setup-result.txt。
+5. 点击插件图标打开选项，填自己的 Gmail、自己的 Gmail 模板名称、自己数据表的 table_id（tbl 开头）。保存参数，点「连接并启动」。
 
-包内自带 Python、时区数据、本地队列、Native Host。电脑不需要安装 Python、飞书 CLI 或影刀。群播报和飞书表读写目前经管理员电脑中转；管理员电脑离线时这些操作会等恢复。请勿把此私有包公开上传。
+包内自带 Python、时区数据、本地队列、Native Host。电脑不需要安装 Python、飞书 CLI 或影刀。飞书表读写直接连接飞书，不依赖管理员电脑。team-feishu.json 含团队凭据，只单独发给可信同事，不上传 GitHub。
 '@
 [IO.File]::WriteAllText((Join-Path $out '安装说明.txt'), $guide, $utf8)
 $zip = $out + '.zip'
 Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip
-Write-Output ('Complete private team installer: ' + $zip)
+Write-Output ('Complete public team installer: ' + $zip)
