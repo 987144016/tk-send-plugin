@@ -668,7 +668,8 @@ async function refresh() {
         + ' / 飞书 ' + (a.feishu_table_name || a.feishu_table_id || '-')
         + ' / 一次最多 ' + (a.batch_size == null ? '-' : a.batch_size) + ' 人' + (Number(a.batch_size) === 0 ? '（暂时禁用）' : '') + '，批间隔 ' + (a.window_minutes || '-') + ' 分钟'
         + ' · 共 ' + accounts.length + ' 个账号',
-      s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',\n      (() => { const rs = s.config?.reply_scan || s.replyScanSettings || {}; const on = rs.enabled !== false; const m = Number(rs.interval_minutes) || 10; return '定期查回信：' + (on ? ('开 · 每 ' + m + ' 分钟') : '关'); })(),
+      s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',
+      (() => { const rs = s.config?.reply_scan || s.replyScanSettings || {}; const on = rs.enabled !== false; const m = Number(rs.interval_minutes) || 10; return '定期查回信：' + (on ? ('开 · 每 ' + m + ' 分钟') : '关'); })(),
       s.config?.sender ? '发件邮箱（会话）：' + s.config.sender : '',
       s.current ? '当前任务：' + s.current.job.recipient + ' · ' + (s.current.stage || s.current.phase) : '等待队列任务',
       s.lastResult?.message,

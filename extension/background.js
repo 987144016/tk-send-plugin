@@ -47,7 +47,7 @@ async function ensureQueueRunning() {
 
 let running = false, runningSince = 0, timer;
 const read = () => chrome.storage.local.get(
-  ['config', 'current', 'client_id', 'inboxScanPending', 'rrIndex', 'slotCooldown']);
+  ['config', 'current', 'client_id', 'inboxScanPending', 'rrIndex', 'slotCooldown', 'lastReplyScanAt', 'replyScanSettings']);
 const save = current => chrome.storage.local.set({current});
 
 /* ---------------- 多标签页模式（一人管多个谷歌账号） ----------------

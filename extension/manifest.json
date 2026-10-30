@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.9",
-  "description": "Standalone Gmail web click-send. v0.3.9: Options periodic reply-scan toggle (decoupled from send); keeps schedule BCC + Y=0 + bounce-label.",
+  "version": "0.3.10",
+  "description": "Standalone Gmail web click-send. v0.3.10: fix Options schedule panel stuck loading; reply-scan interval persistence.",
   "permissions": [
     "storage",
     "alarms",
