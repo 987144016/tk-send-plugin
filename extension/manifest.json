@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.7",
-  "description": "Standalone Gmail web click-send. v0.3.6: Y=0 temporarily disables an account (no enqueue/claim); keeps v0.3.5 bounce-label + v0.3.4 BCC/multi-tab.",
+  "version": "0.3.8",
+  "description": "Standalone Gmail web click-send. v0.3.8: timed schedule BCC enqueue by pace X/Y; keeps Y=0 disable + bounce-label + BCC/multi-tab.",
   "permissions": [
     "storage",
     "alarms",
