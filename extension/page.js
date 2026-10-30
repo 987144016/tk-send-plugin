@@ -304,7 +304,8 @@ export async function gmailPage(action,job){
     if(!matches(recipients,expected))return {waiting:true,stage:bulk?('等待 Gmail 确认'+expected.length+'位密送收件人'):'等待 Gmail 确认唯一收件人'};
     if(job.gmail_template_name){
       if(!compose.dataset.gmwTemplateRequested){
-        const items=[...document.querySelectorAll('[role="menuitem"]')].filter(visible);
+        // Gmail also renders saved-template rows as .J-N without role=menuitem.
+        const items=[...new Set(document.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],.J-M .J-N,[role="menu"] .J-N'))].filter(visible);
         const normalize=s=>String(s||'').replace(/\s+/g,' ').trim();
         const requested=normalize(job.gmail_template_name);
         const labels=e=>[
@@ -321,6 +322,9 @@ export async function gmailPage(action,job){
         }));
         const names=exact.length?exact:shortened;
         if(names.length>1)return {error:'ambiguous_saved_template'};
+        if(!names.length&&items.some(e=>/^(插入模板|Insert template)$/i.test(text(e)))&&
+            items.some(e=>! /^(插入模板|Insert template)$/i.test(text(e))))
+          return {error:'gmail_template_not_found'};
         let target=names[0],step='choose';
         if(!target){target=items.find(e=>/^(模板|Templates)(?:\s*[►▶▸›])?$/i.test(text(e)));step='templates';}
         if(!target){target=[...compose.querySelectorAll('[aria-label="更多选项"],[aria-label="More options"]')].find(visible);step='more';}

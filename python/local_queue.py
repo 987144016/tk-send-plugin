@@ -605,6 +605,28 @@ def save_state(s: dict) -> None:
     save_json(STATE_FILE, s)
 
 
+def reset_unsent_for_fresh_start() -> dict:
+    """After an explicit pause, discard queued drafts so the next round uses current settings."""
+    with _lock:
+        s = state()
+        if s.get("enabled"):
+            raise ValueError("fresh start requires a paused queue")
+        if s.get("current") or list(JOBS.glob("active-*.json")):
+            raise ValueError("unfinished Gmail send needs reconciliation before fresh start")
+        cancelled = 0
+        for path in list_pending():
+            job = load_json(path, {})
+            job["cancelled_at"] = now_iso()
+            job["cancel_reason"] = "fresh_start_after_pause"
+            save_json(JOBS / path.name.replace("pending-", "cancelled-", 1), job)
+            path.unlink()
+            cancelled += 1
+        s["gmail_ui_switch"] = {}
+        s["updated_at"] = now_iso()
+        save_state(s)
+        return {"ok": True, "cancelled": cancelled, "at": s["updated_at"]}
+
+
 def auth_token(handler: BaseHTTPRequestHandler) -> str:
     h = handler.headers.get("Authorization") or ""
     if h.startswith("Bearer "):
@@ -2388,6 +2410,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, result)
             except Exception as e:
                 self._json(500, {"detail": "schedule-tick failed: " + str(e)})
+            return
+
+        if path == "/api/reset-unsent-for-fresh-start":
+            try:
+                self._json(200, reset_unsent_for_fresh_start())
+            except ValueError as e:
+                self._json(409, {"detail": str(e)})
             return
 
         if path == "/api/enqueue-test":

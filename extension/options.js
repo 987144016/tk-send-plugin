@@ -784,8 +784,9 @@ el('connect').onclick = async () => {
       throw Error('本机队列未能自动启动：' + (ensured.error || '') + '。' + (ensured.hint || ''));
     }
     let old = await chrome.storage.local.get(['config', 'current', 'client_id']);
+    const freshAfterPause = old.config?.manualPaused === true;
     if (old.current) {
-      showToast('正在恢复上次未完成的邮件任务…', 'info', 12000);
+      showToast('正在结束上次未完成的邮件任务…', 'info', 12000);
       try { await chrome.runtime.sendMessage({type: 'wake'}); } catch {}
       for (let i = 0; i < 24 && old.current; i++) {
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -795,6 +796,15 @@ el('connect').onclick = async () => {
         throw Error('上次邮件尚待 Gmail 已发记录核对；当前任务不会重复发送。请保持该账号 Gmail 页签可用。');
     }
     const {settings, queueNote} = await saveSettings({requireQueue: true});
+    if (freshAfterPause) {
+      const resetResponse = await fetch(ORIGIN + '/api/reset-unsent-for-fresh-start', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+        signal: AbortSignal.timeout(12000),
+      });
+      const resetData = await resetResponse.json();
+      if (!resetResponse.ok) throw Error(resetData.detail || '旧待发任务清理失败');
+      await chrome.storage.local.set({lastResult: null, lastError: null});
+    }
     const response = await fetch(ORIGIN + '/api/browser-mail/extension-bootstrap', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

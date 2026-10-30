@@ -51,4 +51,27 @@ document.body.appendChild(duplicate);
 const ambiguous = await gmailPage('prepare', job);
 assert.equal(ambiguous.error, 'ambiguous_saved_template', 'same truncated prefix never guesses');
 
+item.remove(); duplicate.remove();
+delete compose.dataset.gmwTemplateRequested;
+const more = document.createElement('button');
+more.setAttribute('aria-label', '更多选项');
+compose.appendChild(more);
+let moreClicks = 0;
+more.click = () => { moreClicks++; };
+const menu = document.createElement('div');
+menu.setAttribute('role', 'menu');
+menu.innerHTML = '<div class="J-N"><div class="J-N-Jz">插入模板</div></div><div class="J-N"><div class="J-N-Jz">tk邀约模板2</div></div>';
+document.body.appendChild(menu);
+const savedTemplate = menu.lastElementChild;
+let savedClicks = 0;
+savedTemplate.click = () => { savedClicks++; };
+const fromRealMenu = await gmailPage('prepare', {...job, gmail_template_name: 'tk邀约模板2'});
+assert.equal(fromRealMenu.waiting, true);
+assert.equal(savedClicks, 1, 'visible Gmail template without role=menuitem is selected');
+assert.equal(moreClicks, 0, 'an already open menu is not reopened');
+delete compose.dataset.gmwTemplateRequested;
+const missing = await gmailPage('prepare', {...job, gmail_template_name: 'missing template'});
+assert.equal(missing.error, 'gmail_template_not_found', 'an open saved-template list reports an absent name');
+assert.equal(moreClicks, 0, 'missing template does not reopen the menu');
+
 console.log('Gmail saved template menu accepts a unique ellipsized long name');
