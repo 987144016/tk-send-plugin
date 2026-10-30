@@ -653,7 +653,8 @@ def parse_gmail_reply_time(raw: str) -> str | None:
 def queued_emails() -> set[str]:
     out: set[str] = set()
     JOBS.mkdir(parents=True, exist_ok=True)
-    for p in list(JOBS.glob("pending-*.json")) + list(JOBS.glob("active-*.json")):
+    for p in (list(JOBS.glob("pending-*.json")) + list(JOBS.glob("active-*.json"))
+              + list(JOBS.glob("held-*.json"))):
         job = load_json(p, {})
         r = (job.get("recipient") or "").strip().lower()
         if r:
