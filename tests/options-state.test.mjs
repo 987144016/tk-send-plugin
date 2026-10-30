@@ -5,6 +5,14 @@ const account = {mailbox: 'sender@gmail.com', template_name: 'own template',
   feishu_table_name: 'sender table'};
 
 {
+  const partial = {accounts: [{mailbox: 'sender@gmail.com', template_name: '',
+    feishu_table_name: ''}], active_mailbox: 'sender@gmail.com'};
+  const result = chooseInitialSettings({accounts: [account]}, {draftSettings: partial});
+  assert.equal(result.restoredDraft, true);
+  assert.equal(result.settings.accounts[0].template_name, '');
+}
+
+{
   const result = chooseInitialSettings({accounts: [], mailbox: ''},
     {settings: {accounts: [account]}, accounts: [account], active_mailbox: account.mailbox});
   assert.equal(result.restoredLocal, true);

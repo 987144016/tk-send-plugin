@@ -7,11 +7,11 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not (Test-Path -LiteralPath (Join-Path $PythonRuntime 'pythonw.exe'))) {
   throw "Bundled Python runtime not found: $PythonRuntime"
 }
-$outBase = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $Root 'dist\ready-to-send' }
-New-Item -ItemType Directory -Path $outBase -Force | Out-Null
 $version = (Get-Content -LiteralPath (Join-Path $Root 'extension\manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
-$name = 'TK-Send-Team-v' + $version + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-$out = Join-Path $Root ('data\build\' + $name)
+$outBase = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $Root ('dist\release-v' + $version) }
+New-Item -ItemType Directory -Path $outBase -Force | Out-Null
+$packageName = 'TK-Send-Team-v' + $version + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+$out = Join-Path $Root ('data\build\' + $packageName)
 New-Item -ItemType Directory -Path $out | Out-Null
 foreach ($name in @('extension','python','native-host','scripts','config','runtime','data\jobs','data\logs')) {
   New-Item -ItemType Directory -Path (Join-Path $out $name) -Force | Out-Null
@@ -61,6 +61,6 @@ TK Send Plugin 团队版安装（Windows + Chrome）
 包内自带 Python、时区数据、本地队列、Native Host。电脑不需要安装 Python、飞书 CLI 或影刀。飞书表读写直接连接飞书，不依赖管理员电脑。team-feishu.json 含团队凭据，只单独发给可信同事，不上传 GitHub。
 '@
 [IO.File]::WriteAllText((Join-Path $out '安装说明.txt'), $guide, $utf8)
-$zip = Join-Path $outBase ($name + '.zip')
+$zip = Join-Path $outBase ($packageName + '.zip')
 Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip
 Write-Output ('Complete public team installer: ' + $zip)

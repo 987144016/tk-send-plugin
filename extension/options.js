@@ -81,6 +81,8 @@ const SEED = [
 
 let accounts = SEED.map(a => ({...a}));
 let activeMailbox = SEED[0].mailbox;
+let draftTimer = null;
+let draftRevision = 0;
 
 function normalizeMailbox(v) {
   return (v || '').trim().toLowerCase();
@@ -100,6 +102,26 @@ function readAccountsFromDom() {
       batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? Math.max(0, n) : 15; })(),
     };
   });
+}
+
+function draftFromUi() {
+  const activeNode = document.querySelector('.acct.active .f-mailbox');
+  return {
+    accounts: readAccountsFromDom(),
+    active_mailbox: normalizeMailbox(activeNode?.value) || activeMailbox,
+    reply_scan: {enabled: el('reply-scan-enabled')?.checked !== false,
+      interval_minutes: Number(el('reply-scan-interval')?.value) || 10},
+  };
+}
+
+async function persistDraft() {
+  await chrome.storage.local.set({draftSettings: draftFromUi()});
+}
+
+function scheduleDraftSave() {
+  draftRevision += 1;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => { persistDraft().catch(() => {}); }, 250);
 }
 
 function validateAccounts(list, active) {
@@ -174,6 +196,7 @@ function renderAccounts() {
       activeMailbox = normalizeMailbox(div.querySelector('.f-mailbox').value) || activeMailbox;
       renderAccounts();
       updateActiveLabel();
+      scheduleDraftSave();
     };
     div.querySelector('.btn-del').onclick = () => {
       accounts = readAccountsFromDom();
@@ -184,6 +207,7 @@ function renderAccounts() {
         activeMailbox = accounts[0].mailbox;
       renderAccounts();
       updateActiveLabel();
+      scheduleDraftSave();
     };
   });
   updateActiveLabel();
@@ -251,7 +275,7 @@ async function persistLocal(settings) {
 }
 
 async function loadLocal() {
-  const s = await chrome.storage.local.get(['settings', 'accounts', 'active_mailbox']);
+  const s = await chrome.storage.local.get(['settings', 'accounts', 'active_mailbox', 'draftSettings']);
   return s;
 }
 
@@ -274,8 +298,14 @@ async function pushQueueConfig(settings) {
 }
 
 async function saveSettings({requireQueue = false} = {}) {
+  const savedRevision = draftRevision;
   const settings = payloadFromUi();
+  let effectiveSettings = settings;
   await persistLocal(settings);
+  if (draftRevision === savedRevision) {
+    clearTimeout(draftTimer);
+    await chrome.storage.local.remove('draftSettings');
+  }
   try {
     const prev = (await chrome.storage.local.get('config')).config || {};
     await chrome.storage.local.set({
@@ -290,7 +320,10 @@ async function saveSettings({requireQueue = false} = {}) {
   let queueNote = '队列离线：已只写入扩展本地；连接并启动会自动拉起队列';
   try {
     const data = await pushQueueConfig(settings);
-    if (data.settings) await persistLocal(data.settings);
+    if (data.settings) {
+      effectiveSettings = data.settings;
+      await persistLocal(effectiveSettings);
+    }
     queueNote = '已同步 config/one-mailbox.json · active=' + (data.mailbox || settings.mailbox)
       + ' · accounts=' + (settings.accounts || []).length;
     if (Array.isArray(data.settings?.accounts) && data.settings.accounts.length) {
@@ -316,7 +349,7 @@ async function saveSettings({requireQueue = false} = {}) {
     if (requireQueue) throw Error('本地队列离线或写入失败：' + e.message + '。连接并启动应自动拉起；若仍失败请双击「一点即运行」');
     queueNote = '队列未同步（' + e.message + '）；扩展本地已保存';
   }
-  return {settings, queueNote};
+  return {settings: effectiveSettings, queueNote};
 }
 
 function numAllowZero(v, fallback) {
@@ -720,21 +753,26 @@ el('add-account').onclick = () => {
     batch_size: 15,
   });
   renderAccounts();
+  scheduleDraftSave();
 };
 
 el('save').onclick = async () => {
+  let draftSaved = false;
   try {
+    await persistDraft();
+    draftSaved = true;
     await ensureLocalQueue();
     const {queueNote} = await saveSettings({requireQueue: false});
     el('status').textContent = '参数已保存。\n' + queueNote;
     await refresh();
   } catch (e) {
-    el('status').textContent = e.message;
+    el('status').textContent = (draftSaved ? '本地草稿已保存；' : '') + e.message;
   }
 };
 
 el('connect').onclick = async () => {
   try {
+    await persistDraft();
     const ensured = await ensureLocalQueue({force: true});
     if (!ensured.ok) {
       throw Error('本机队列未能自动启动：' + (ensured.error || '') + '。' + (ensured.hint || ''));
@@ -901,7 +939,9 @@ async function boot() {
   const initial = chooseInitialSettings(queueSettings, local);
   loaded = initial.settings;
   if (initial.restoredLocal) {
-    el('update-hint').textContent = '已恢复扩展本地保存的账号；队列尚未配置，请点「保存参数」同步。';
+    el('update-hint').textContent = initial.restoredDraft ?
+      '已恢复上次未填完的本地草稿；填齐后点「保存参数」。' :
+      '已恢复扩展本地保存的账号；队列尚未配置，请点「保存参数」同步。';
   }
   if (loaded && Array.isArray(loaded.accounts) && loaded.accounts.length) {
     applyServerAccounts(loaded);
@@ -930,4 +970,7 @@ async function boot() {
 }
 
 boot();
+el('accounts').addEventListener('input', scheduleDraftSave);
+el('reply-scan-enabled').addEventListener('change', scheduleDraftSave);
+el('reply-scan-interval').addEventListener('input', scheduleDraftSave);
 setInterval(refresh, POLL_MS);

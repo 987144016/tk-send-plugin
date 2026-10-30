@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.23",
-  "description": "Standalone Gmail web click-send. v0.3.23: reliable first-run diagnostics and paths.",
+  "version": "0.3.24",
+  "description": "Standalone Gmail web click-send. v0.3.24: drafts survive refresh and table names resolve automatically.",
   "permissions": [
     "storage",
     "alarms",
