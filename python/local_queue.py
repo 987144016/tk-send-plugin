@@ -78,6 +78,23 @@ def cfg() -> dict:
     return load_json(DEFAULT_CONFIG, {})
 
 
+
+def normalize_reply_scan(raw, fallback=None) -> dict:
+    """Options「定期查回信」：与发信/Y/暂停解耦。"""
+    base = {"enabled": True, "interval_minutes": 10}
+    if isinstance(fallback, dict):
+        base.update({k: fallback[k] for k in ("enabled", "interval_minutes") if k in fallback})
+    src = raw if isinstance(raw, dict) else {}
+    if "enabled" in src:
+        base["enabled"] = bool(src.get("enabled"))
+    if "interval_minutes" in src and src.get("interval_minutes") is not None and src.get("interval_minutes") != "":
+        try:
+            mins = int(src.get("interval_minutes"))
+        except (TypeError, ValueError):
+            mins = int(base.get("interval_minutes") or 10)
+        base["interval_minutes"] = max(3, min(180, mins))
+    return base
+
 def settings_view(c: dict) -> dict:
     """Flat settings + accounts list for Options multi-account UI."""
     mailbox = (c.get("active_mailbox") or c.get("mailbox") or "").strip().lower()
@@ -128,6 +145,7 @@ def settings_view(c: dict) -> dict:
         "armed": bool(c.get("armed")),
         "accounts": accounts_out,
         "switch_policy": c.get("switch_policy") or {"mode": "finish_then_next", "keep_test1_on_active": True},
+        "reply_scan": normalize_reply_scan(c.get("reply_scan")),
     }
 
 
@@ -226,6 +244,8 @@ def apply_settings(body: dict) -> dict:
             c["schema_version"] = 2
             c["updated_at"] = now_iso()
             c["updated_via"] = "options-ui-multi"
+            if "reply_scan" in body or not isinstance(c.get("reply_scan"), dict):
+                c["reply_scan"] = normalize_reply_scan(body.get("reply_scan"), c.get("reply_scan"))
             save_json(DEFAULT_CONFIG, c)
             return settings_view(c)
 
@@ -315,6 +335,8 @@ def apply_settings(body: dict) -> dict:
         c["mailboxes"] = boxes
         c["updated_at"] = now_iso()
         c["updated_via"] = "options-ui"
+        if "reply_scan" in body or not isinstance(c.get("reply_scan"), dict):
+            c["reply_scan"] = normalize_reply_scan(body.get("reply_scan"), c.get("reply_scan"))
         save_json(DEFAULT_CONFIG, c)
         return settings_view(c)
 

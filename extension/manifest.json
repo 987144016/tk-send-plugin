@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TK Send Plugin · Gmail Web (standalone)",
-  "version": "0.3.8",
-  "description": "Standalone Gmail web click-send. v0.3.8: timed schedule BCC enqueue by pace X/Y; keeps Y=0 disable + bounce-label + BCC/multi-tab.",
+  "version": "0.3.9",
+  "description": "Standalone Gmail web click-send. v0.3.9: Options periodic reply-scan toggle (decoupled from send); keeps schedule BCC + Y=0 + bounce-label.",
   "permissions": [
     "storage",
     "alarms",

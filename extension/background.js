@@ -139,6 +139,10 @@ async function healSession(existingClientId) {
     throw Error(data.detail || '会话 token 无效');
   const stored = await chrome.storage.local.get(['client_id']);
   const client_id = existingClientId || stored.client_id || crypto.randomUUID();
+  const prevBag = await chrome.storage.local.get(['config', 'replyScanSettings']);
+  const prevRs = prevBag.replyScanSettings
+    || (prevBag.config && prevBag.config.reply_scan)
+    || {enabled: true, interval_minutes: 10};
   const config = {
     token: data.token,
     account_id: data.account_id || 'multi-active',
@@ -146,8 +150,9 @@ async function healSession(existingClientId) {
     template_name: data.template_name || '',
     enabled: true,
     manualPaused: false,
+    reply_scan: prevRs,
   };
-  await chrome.storage.local.set({config, client_id, lastError: null});
+  await chrome.storage.local.set({config, client_id, lastError: null, replyScanSettings: prevRs});
   return {config, client_id};
 }
 
@@ -440,6 +445,97 @@ async function finish(config, current) {
   // Keep Gmail tab open (never close the whole Chrome window).
 }
 
+
+async function replyScanSettingsFrom(stored) {
+  const cfg = stored?.config || {};
+  const rs = (cfg.reply_scan && typeof cfg.reply_scan === 'object')
+    ? cfg.reply_scan
+    : (stored?.replyScanSettings && typeof stored.replyScanSettings === 'object'
+      ? stored.replyScanSettings
+      : {enabled: true, interval_minutes: 10});
+  return {
+    enabled: rs.enabled !== false,
+    interval_minutes: Math.max(3, Math.min(180, Number(rs.interval_minutes) || 10)),
+  };
+}
+
+async function maybePeriodicReplyScan(config, stored) {
+  // 与发信解耦：暂停发送 / Y=0 / 0 封 时仍可扫；仅「定期查回信」关才停。
+  try {
+    const rs = await replyScanSettingsFrom(stored);
+    if (!rs.enabled) return;
+    if (!config?.token) return;
+    if (stored?.current) return;
+    if (stored?.inboxScanPending) return;
+    const last = Number(stored?.lastReplyScanAt || 0);
+    const gapMs = rs.interval_minutes * 60 * 1000;
+    if (last && Date.now() - last < gapMs) return;
+    const slots = await listGmailSlots();
+    if (!slots.length) {
+      await reportDiag(config, 'reply_scan_no_gmail_slot');
+      return;
+    }
+    await chrome.storage.local.set({lastReplyScanAt: Date.now()});
+    const notes = [];
+    for (const slot of slots) {
+      const fake = {
+        tabId: slot.tabId,
+        job: {sender: slot.mailbox, recipient: '', marker: '', job_id: ''},
+      };
+      try {
+        if (!(await ownTab(fake))) {
+          notes.push(slot.mailbox + '=tab_unusable');
+          continue;
+        }
+        let scan = await page(fake, 'scan_inbox');
+        if (scan?.waiting) {
+          await new Promise(r => setTimeout(r, 2800));
+          scan = await page(fake, 'scan_inbox');
+        }
+        if (scan?.error) {
+          notes.push(slot.mailbox + '=' + scan.error);
+          continue;
+        }
+        const scanned = await api(config.token, 'inbox_scan', {
+          scan: {
+            mailbox: slot.mailbox,
+            recipient: '',
+            marker: '',
+            job_id: '',
+            reason: 'periodic_reply',
+            replies_found: !!(scan && (scan.replies_found || (scan.replies || []).length)),
+            replies: (scan && scan.replies) || [],
+            inbox_rows: (scan && scan.inbox_rows) || [],
+            spam_rows: (scan && scan.spam_rows) || [],
+            no_switch: true,
+          },
+        });
+        const rw = (scanned && scanned.reply_writeback) || [];
+        const rwOk = rw.filter(x => x && x.ok && !x.skipped).length;
+        const bw = (scanned && scanned.bounce_writeback) || [];
+        notes.push(
+          slot.mailbox.split('@')[0]
+          + ':回复' + ((scanned && scanned.replies_found) ? ((scanned.replies || []).length) : 0)
+          + '/回写' + rwOk
+          + '/退信类' + bw.length
+        );
+      } catch (e) {
+        notes.push(slot.mailbox + '=err:' + (e.message || e));
+      }
+    }
+    await reportDiag(config, 'periodic_reply_scan', {notes: notes.slice(0, 8), interval_minutes: rs.interval_minutes});
+    await chrome.storage.local.set({
+      lastResult: {at: Date.now(), message: '定期查回信完成 · ' + notes.join(' · ')},
+    });
+  } catch (e) {
+    try {
+      await chrome.storage.local.set({
+        lastError: {at: Date.now(), message: '定期查回信：' + (e.message || e)},
+      });
+    } catch {}
+  }
+}
+
 async function tick() {
   // 看门狗：某次 tick 卡死（await 永不返回）时不能把整个队列冻住。
   if (running && Date.now() - runningSince < 180000) return;
@@ -498,6 +594,13 @@ async function tick() {
         await api(config.token, 'state', {enabled: true});
         await chrome.storage.local.set({config});
       }
+    }
+    // 定期查回信：与「扩展发送 enabled」解耦；暂停发信仍可扫。
+    if (!current && config?.token) {
+      await maybePeriodicReplyScan(config, stored);
+      stored = await read();
+      config = stored.config || config;
+      current = stored.current;
     }
     if (!config?.enabled || !config.token) return;
     if (!current) {
@@ -641,7 +744,9 @@ async function tick() {
     running = false;
     clearTimeout(timer);
     const state = await read();
-    if (state.config?.enabled || state.current?.receipt) timer = setTimeout(tick, 2500);
+    const rsOn = ((state.config?.reply_scan?.enabled) !== false)
+      && ((state.replyScanSettings?.enabled) !== false);
+    if (state.config?.enabled || state.current?.receipt || rsOn) timer = setTimeout(tick, 2500);
   }
 }
 
@@ -655,6 +760,16 @@ chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id) return;
   if (message.type === 'wake') { tick(); reply({ok: true}); return true; }
+  if (message.type === 'reply-scan-settings') {
+    const rs = message.reply_scan || {enabled: true, interval_minutes: 10};
+    chrome.storage.local.get('config').then(async s => {
+      const cfg = {...(s.config || {}), reply_scan: rs};
+      await chrome.storage.local.set({config: cfg, replyScanSettings: rs});
+      tick();
+      reply({ok: true});
+    }).catch(e => reply({ok: false, error: e.message}));
+    return true;
+  }
   if (message.type === 'heal') {
     healSession().then(async h => {
       try { await api(h.config.token, 'state', {enabled: true}); } catch {}

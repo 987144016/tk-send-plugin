@@ -65,6 +65,20 @@ input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #c5d5cf
   <button id="send-now" type="button" title="每个剩余>0的账号入队1封密送；密送粘贴Y人；剩余=0跳过；不切号不等节奏">立即发送（按Y人密送一封测发）</button>
 </div>
 
+
+<h2>查回信</h2>
+<div class="round-panel" id="reply-scan-panel">
+  <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+    <input id="reply-scan-enabled" type="checkbox" checked style="width:auto">
+    定期查回信
+  </label>
+  <p class="hint" style="margin:8px 0">开着时：按下方间隔自动扫<strong>已登录</strong>的 Gmail 收件箱（含垃圾/可疑），有回复才写飞书「回复时间」、退信/可疑拦截照旧分类；<strong>不依赖刚发过信</strong>。暂停本机发送、Y=0、本轮 0 封时只要此开关开着仍会扫。关=完全不扫（发信成功后的那次收件箱核对仍保留）。</p>
+  <div class="row" style="max-width:280px">
+    <label for="reply-scan-interval">查回信间隔（分钟）</label>
+    <input id="reply-scan-interval" type="number" min="3" max="180" value="10">
+  </div>
+</div>
+
 <h2>发信排程（双账号）</h2>
 <div id="round-panel" class="round-panel" role="status">
   <div id="schedule-summary" class="hint" style="margin-bottom:8px">汇总读取中…</div>

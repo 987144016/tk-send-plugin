@@ -33,7 +33,9 @@
 
 `scripts\Stop-LocalQueue.ps1`
 
-版本见根目录 `VERSION`（当前 0.3.8-schedule-enqueue）。
+版本见根目录 `VERSION`（当前 0.3.9-reply-scan-toggle）。
+
+**定期查回信（0.3.9+）**：Options 开关默认开；与发信解耦。重载扩展；Python 改动需重启队列。
 **定时入队（0.3.8+）**：队列后台按各号 X/Y 自动 BCC 入队；改代码后需重启队列 + chrome://extensions 重新加载扩展。
 
 
@@ -50,5 +52,7 @@
 
 同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
 
-版本见根目录 `VERSION`（当前 0.3.8-schedule-enqueue）。
+版本见根目录 `VERSION`（当前 0.3.9-reply-scan-toggle）。
+
+**定期查回信（0.3.9+）**：Options 开关默认开；与发信解耦。重载扩展；Python 改动需重启队列。
 

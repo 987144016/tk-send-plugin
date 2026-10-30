@@ -221,6 +221,10 @@ function payloadFromUi() {
   if (activeNode) activeMailbox = normalizeMailbox(activeNode.value) || activeMailbox;
   validateAccounts(accounts, activeMailbox);
   const a = activeAccount();
+  const rsEnabled = !!(el('reply-scan-enabled') && el('reply-scan-enabled').checked);
+  let rsInterval = Number(el('reply-scan-interval')?.value);
+  if (!Number.isFinite(rsInterval)) rsInterval = 10;
+  rsInterval = Math.max(3, Math.min(180, Math.round(rsInterval)));
   return {
     mailbox: a.mailbox,
     template_name: a.template_name,
@@ -243,6 +247,7 @@ function payloadFromUi() {
       armed: true,
     })),
     switch_policy: {mode: 'finish_then_next', keep_test1_on_active: false, test_send: 'per_account_one'},
+    reply_scan: {enabled: rsEnabled, interval_minutes: rsInterval},
   };
 }
 
@@ -276,6 +281,17 @@ async function pushQueueConfig(settings) {
 async function saveSettings({requireQueue = false} = {}) {
   const settings = payloadFromUi();
   await persistLocal(settings);
+  try {
+    const prev = (await chrome.storage.local.get('config')).config || {};
+    await chrome.storage.local.set({
+      config: {
+        ...prev,
+        reply_scan: settings.reply_scan || {enabled: true, interval_minutes: 10},
+      },
+      replyScanSettings: settings.reply_scan || {enabled: true, interval_minutes: 10},
+    });
+    try { await chrome.runtime.sendMessage({type: 'reply-scan-settings', reply_scan: settings.reply_scan}); } catch {}
+  } catch {}
   let queueNote = '队列离线：已只写入扩展本地；连接并启动会自动拉起队列';
   try {
     const data = await pushQueueConfig(settings);
@@ -312,7 +328,19 @@ function numAllowZero(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+
+function applyReplyScanUi(settings) {
+  const rs = (settings && settings.reply_scan && typeof settings.reply_scan === 'object')
+    ? settings.reply_scan
+    : {enabled: true, interval_minutes: 10};
+  const en = el('reply-scan-enabled');
+  const iv = el('reply-scan-interval');
+  if (en) en.checked = rs.enabled !== false;
+  if (iv) iv.value = String(Math.max(3, Math.min(180, Number(rs.interval_minutes) || 10)));
+}
+
 function applyServerAccounts(settings) {
+  applyReplyScanUi(settings);
   const list = settings.accounts || [];
   if (!list.length) return;
   accounts = list.map(a => {
@@ -640,7 +668,7 @@ async function refresh() {
         + ' / 飞书 ' + (a.feishu_table_name || a.feishu_table_id || '-')
         + ' / 一次最多 ' + (a.batch_size == null ? '-' : a.batch_size) + ' 人' + (Number(a.batch_size) === 0 ? '（暂时禁用）' : '') + '，批间隔 ' + (a.window_minutes || '-') + ' 分钟'
         + ' · 共 ' + accounts.length + ' 个账号',
-      s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',
+      s.config?.enabled ? '扩展发送：已启动' : '扩展发送：已暂停',\n      (() => { const rs = s.config?.reply_scan || s.replyScanSettings || {}; const on = rs.enabled !== false; const m = Number(rs.interval_minutes) || 10; return '定期查回信：' + (on ? ('开 · 每 ' + m + ' 分钟') : '关'); })(),
       s.config?.sender ? '发件邮箱（会话）：' + s.config.sender : '',
       s.current ? '当前任务：' + s.current.job.recipient + ' · ' + (s.current.stage || s.current.phase) : '等待队列任务',
       s.lastResult?.message,
@@ -718,6 +746,7 @@ el('connect').onclick = async () => {
       template_name: data.template_name || settings.template_name,
       enabled: true,
       manualPaused: false,
+      reply_scan: settings.reply_scan || {enabled: true, interval_minutes: 10},
     };
     await api(config.token, 'state', {enabled: true});
     await chrome.storage.local.set({config, client_id, settings, lastError: null});
@@ -848,6 +877,7 @@ async function boot() {
     activeMailbox = SEED[0].mailbox;
     renderAccounts();
   }
+  applyReplyScanUi(loaded || {reply_scan: {enabled: true, interval_minutes: 10}});
   await refresh();
 }
 
