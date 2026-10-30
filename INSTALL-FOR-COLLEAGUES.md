@@ -33,7 +33,8 @@
 
 `scripts\Stop-LocalQueue.ps1`
 
-版本见根目录 `VERSION`（当前 0.3.5-bounce-label）。
+版本见根目录 `VERSION`（当前 0.3.8-schedule-enqueue）。
+**定时入队（0.3.8+）**：队列后台按各号 X/Y 自动 BCC 入队；改代码后需重启队列 + chrome://extensions 重新加载扩展。
 
 
 ## 更新（队列启动时自动拉取）
@@ -49,5 +50,5 @@
 
 同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
 
-版本见根目录 `VERSION`（当前 0.3.7-queue-start-pull）。
+版本见根目录 `VERSION`（当前 0.3.8-schedule-enqueue）。
 

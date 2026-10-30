@@ -52,6 +52,11 @@ STATE_FILE = DATA / "queue-state.json"
 SENT_LOG = DATA / "sent-pace.jsonl"
 
 _lock = threading.RLock()
+_scheduler_stop = threading.Event()
+_scheduler_thread: threading.Thread | None = None
+SCHEDULE_TICK_SECONDS = 20
+SCHEDULE_LOG = LOGS / "schedule-enqueue.log"
+
 
 
 def now_iso() -> str:
@@ -1183,6 +1188,213 @@ def enqueue_test_per_account() -> dict:
     }
 
 
+
+def _log_schedule(event: dict) -> None:
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with SCHEDULE_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": now_iso(), **event}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def enqueue_schedule_one_account(account: dict, c: dict | None = None) -> dict:
+    """定时入队：指定账号 1 封 BCC（recipients=Y 人）。enqueue_reason=schedule，走 pace。
+
+    与「立即发送」同等密送形态；飞书 list_unsent_gmail 已含 24h 跨表去重 / 已回复 / 退信过滤。
+    """
+    c = c or cfg()
+    mb = (account.get("mailbox") or "").strip().lower()
+    if not mb:
+        raise ValueError("empty mailbox")
+    template = (account.get("template_name") or "").strip() or (c.get("template_name") or "").strip()
+    armed = bool(c.get("armed")) and bool(account.get("armed", c.get("armed"))) and bool(template)
+    pace = account.get("pace") if isinstance(account.get("pace"), dict) else (c.get("pace") or {})
+    batch_y = pace_batch_y(pace, 15)
+    if batch_y > 100:
+        batch_y = 100
+    if batch_y <= 0:
+        raise ValueError("y_zero_disabled")
+    if not armed:
+        raise ValueError("not_armed_or_no_template")
+    c_acc = cfg_for_account(c, account)
+    already = queued_emails()
+    try:
+        remaining = count_unsent_gmail(c_acc, use_cache=False)
+    except Exception as e:
+        raise ValueError("feishu_error: " + str(e)) from e
+    if remaining <= 0:
+        raise ValueError("no_remaining")
+    try:
+        candidates = list_unsent_gmail(c_acc, use_cache=False)
+    except Exception as e:
+        raise ValueError("feishu_list_error: " + str(e)) from e
+    want = min(batch_y, remaining, 100)
+    picked = [x for x in candidates if x["recipient"] not in already][:want]
+    if not picked:
+        raise ValueError("all_queued_or_empty")
+    emails = [str(x["recipient"]).strip().lower() for x in picked]
+    records = [{
+        "recipient": str(x["recipient"]).strip().lower(),
+        "creator_name": x.get("creator_name") or "",
+        "creator_id": x.get("creator_id") or "",
+        "feishu_record_id": x.get("feishu_record_id") or "",
+    } for x in picked]
+    rids = [r["feishu_record_id"] for r in records if r.get("feishu_record_id")]
+    job_id = uuid.uuid4().hex
+    subject = c.get("subject") or "Tiktok paid collaboration from PoseFree Apparel"
+    job = {
+        "job_id": job_id,
+        "sender": mb,
+        "recipient": emails[0],
+        "recipients": emails,
+        "recipient_mode": "bcc",
+        "creator_name": records[0].get("creator_name") or "",
+        "creator_id": records[0].get("creator_id") or "",
+        "feishu_record_id": records[0].get("feishu_record_id") or "",
+        "feishu_record_ids": rids,
+        "records": records,
+        "subject": subject,
+        "gmail_template_name": template,
+        "marker": "TK-" + job_id[:12],
+        "inline_image_count": 2,
+        "enqueue_reason": "schedule",
+        "people_count": len(emails),
+        "created_at": now_iso(),
+    }
+    JOBS.mkdir(parents=True, exist_ok=True)
+    path = JOBS / f"pending-{job_id}.json"
+    save_json(path, job)
+    try:
+        feishu_cache_invalidate()
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "mailbox": mb,
+        "recipients": emails,
+        "people_count": len(emails),
+        "batch_y": batch_y,
+        "remaining_unsent_before": remaining,
+        "template_name": template,
+        "path": str(path),
+        "enqueue_reason": "schedule",
+        "at": now_iso(),
+    }
+
+
+def schedule_tick() -> dict:
+    """一轮定时入队：各号按自身 X/Y 与 pace，eligible 则入队 1 封 BCC。"""
+    c = cfg()
+    with _lock:
+        st = state()
+        enabled = bool(st.get("enabled"))
+    if not enabled:
+        out = {"ok": True, "action": "skip", "reason": "queue_disabled", "at": now_iso()}
+        _log_schedule(out)
+        return out
+    if not c.get("armed"):
+        out = {"ok": True, "action": "skip", "reason": "global_not_armed", "at": now_iso()}
+        _log_schedule(out)
+        return out
+
+    accounts = list_accounts(c)
+    if not accounts:
+        mb = (c.get("active_mailbox") or c.get("mailbox") or "").strip().lower()
+        if mb:
+            accounts = [{
+                "mailbox": mb,
+                "template_name": c.get("template_name"),
+                "feishu_table_name": (c.get("feishu") or {}).get("table_name"),
+                "feishu_table_id": (c.get("feishu") or {}).get("table_id"),
+                "pace": c.get("pace") or {},
+                "armed": c.get("armed"),
+            }]
+
+    enqueued: list[dict] = []
+    skipped: list[dict] = []
+    for account in accounts:
+        mb = (account.get("mailbox") or "").strip().lower()
+        if not mb:
+            continue
+        pace = account.get("pace") if isinstance(account.get("pace"), dict) else (c.get("pace") or {})
+        batch_y = pace_batch_y(pace, 15)
+        if batch_y <= 0:
+            skipped.append({"mailbox": mb, "reason": "y_zero_disabled"})
+            continue
+        template = (account.get("template_name") or "").strip() or (c.get("template_name") or "").strip()
+        armed = bool(c.get("armed")) and bool(account.get("armed", c.get("armed"))) and bool(template)
+        if not armed:
+            skipped.append({"mailbox": mb, "reason": "not_armed_or_no_template"})
+            continue
+        if pending_jobs_for_mailbox(mb) > 0:
+            skipped.append({"mailbox": mb, "reason": "already_pending"})
+            continue
+        c_acc = cfg_for_account(c, account)
+        ok, reason = pace_ok(c_acc, mb)
+        if not ok:
+            allowed_ts, pace_reason = next_pace_allowed_ts(c_acc, mb)
+            skipped.append({
+                "mailbox": mb,
+                "reason": reason,
+                "pace_reason": pace_reason,
+                "next_allowed": format_shanghai(allowed_ts),
+            })
+            continue
+        try:
+            row = enqueue_schedule_one_account(account, c)
+            enqueued.append(row)
+            _log_schedule({"action": "enqueued", **row})
+        except ValueError as e:
+            skipped.append({"mailbox": mb, "reason": str(e)})
+            _log_schedule({"action": "skip_account", "mailbox": mb, "reason": str(e)})
+        except Exception as e:
+            skipped.append({"mailbox": mb, "reason": "error: " + str(e)})
+            _log_schedule({"action": "error", "mailbox": mb, "reason": str(e)})
+
+    out = {
+        "ok": True,
+        "action": "tick",
+        "enqueued_count": len(enqueued),
+        "skipped_count": len(skipped),
+        "enqueued": [{"mailbox": x.get("mailbox"), "job_id": x.get("job_id"), "people_count": x.get("people_count")} for x in enqueued],
+        "skipped": skipped,
+        "pending_after": len(list_pending()),
+        "at": now_iso(),
+    }
+    if enqueued or any(s.get("reason") not in ("already_pending",) for s in skipped):
+        # always log ticks that enqueue; also log non-trivial skips occasionally via always-log for first accounts
+        if enqueued:
+            pass  # already per-account logged
+        _log_schedule({"action": "tick_summary", "enqueued_count": out["enqueued_count"], "skipped_count": out["skipped_count"], "pending_after": out["pending_after"]})
+    return out
+
+
+def _scheduler_loop() -> None:
+    # Let HTTP bind first; then tick forever until stop.
+    _scheduler_stop.wait(5)
+    while not _scheduler_stop.is_set():
+        try:
+            schedule_tick()
+        except Exception as e:
+            _log_schedule({"action": "tick_crash", "reason": str(e)})
+        _scheduler_stop.wait(SCHEDULE_TICK_SECONDS)
+
+
+def start_schedule_enqueue_clock() -> None:
+    global _scheduler_thread
+    if _scheduler_thread is not None and _scheduler_thread.is_alive():
+        return
+    _scheduler_stop.clear()
+    _scheduler_thread = threading.Thread(
+        target=_scheduler_loop, name="schedule-enqueue", daemon=True
+    )
+    _scheduler_thread.start()
+    _log_schedule({"action": "scheduler_started", "tick_seconds": SCHEDULE_TICK_SECONDS})
+
+
+
 def enqueue_from_feishu(count: int = 1, *, reason: str = "test") -> dict:
     """Enqueue helper. reason=test → per-account BCC (see enqueue_test_per_account).
 
@@ -1190,6 +1402,35 @@ def enqueue_from_feishu(count: int = 1, *, reason: str = "test") -> dict:
     """
     if reason == "test" or reason == "test_per_account":
         return enqueue_test_per_account()
+    # schedule / other: prefer dedicated one-account BCC helper (Y from Options)
+    if reason in ("schedule", "scheduled", "pace"):
+        c = cfg()
+        accounts = list_accounts(c)
+        mailbox, entry = active_mailbox_entry(c)
+        account = find_account(c, mailbox) if mailbox else None
+        if not account:
+            account = {
+                "mailbox": mailbox,
+                "template_name": entry.get("template_name"),
+                "feishu_table_name": (c.get("feishu") or {}).get("table_name"),
+                "feishu_table_id": (c.get("feishu") or {}).get("table_id"),
+                "pace": entry.get("pace") if isinstance(entry.get("pace"), dict) else (c.get("pace") or {}),
+                "armed": entry.get("armed"),
+            }
+        row = enqueue_schedule_one_account(account, c)
+        return {
+            "ok": True,
+            "enqueued": [row],
+            "count": 1,
+            "people_count": row.get("people_count") or 0,
+            "reason": "schedule",
+            "recipient_mode": "bcc",
+            "mailbox": row.get("mailbox"),
+            "template_name": row.get("template_name") or "",
+            "pending_after": len(list_pending()),
+            "note": f"已定时入队 1 封密送（{row.get('people_count')} 人 BCC）。",
+            "at": now_iso(),
+        }
     count = max(1, min(int(count), 100))
     c = cfg()
     mailbox, entry = active_mailbox_entry(c)
@@ -1904,6 +2145,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(500, {"detail": "session heal failed: " + str(e)})
             return
 
+        if path == "/api/schedule-tick":
+            try:
+                result = schedule_tick()
+                self._json(200, result)
+            except Exception as e:
+                self._json(500, {"detail": "schedule-tick failed: " + str(e)})
+            return
+
         if path == "/api/enqueue-test":
             # Options 「立即发送（按Y人密送一封）」— 1 BCC job per account with remaining>0; skip remaining=0.
             try:
@@ -2569,11 +2818,14 @@ def main() -> None:
     print(f"[send-plugin] active_mailbox={mailbox} armed={entry.get('armed')} template={entry.get('template_name')!r}")
     print(f"[send-plugin] feishu table={feishu.get('table_name')!r} id={feishu.get('table_id')!r}")
     print(f"[send-plugin] pace every {pace.get('window_minutes')}min / {pace.get('max_messages_per_window')} people (editable in Options)")
-    print(f"[send-plugin] pending jobs={len(list_pending())} — will NOT mass-send; enqueue explicitly")
+    print(f"[send-plugin] pending jobs={len(list_pending())} — schedule clock auto-enqueues BCC by pace X/Y when enabled")
+    start_schedule_enqueue_clock()
+    print(f"[send-plugin] schedule-enqueue clock started (tick={SCHEDULE_TICK_SECONDS}s)")
     httpd = ThreadingHTTPServer((host, port), Handler)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        _scheduler_stop.set()
         print("\n[send-plugin] stopped")
 
 

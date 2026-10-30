@@ -88,5 +88,7 @@ python .\python\enqueue_job.py --to someone@example.com
 
 同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
 
-版本见根目录 `VERSION`（当前 0.3.7-queue-start-pull）。
+版本见根目录 `VERSION`（当前 0.3.8-schedule-enqueue）。
+
+**定时入队（0.3.8+）**：本地队列后台时钟按各邮箱 Options 的批次间隔 X / 一次发多少人 Y 自动 BCC 密送入队（`enqueue_reason=schedule`）；未暂停且 `enabled`/`armed`/Y>0 时生效。改 Python 后需**重启队列**，扩展前端改动需 `chrome://extensions` **重新加载**。
 
