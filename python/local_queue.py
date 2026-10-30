@@ -49,12 +49,18 @@ try:
 except ImportError:  # pragma: no cover
     from python.reply_notify import notify_reply  # type: ignore
 
+try:
+    from feishu_cli import relay_enabled, run_lark
+except ImportError:  # pragma: no cover
+    from python.feishu_cli import relay_enabled, run_lark  # type: ignore
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "one-mailbox.json"
 DATA = ROOT / "data"
 JOBS = DATA / "jobs"
 RECEIPTS = DATA / "receipts"
 LOGS = DATA / "logs"
+PENDING_WRITEBACKS = DATA / "writebacks"
 STATE_FILE = DATA / "queue-state.json"
 SENT_LOG = DATA / "sent-pace.jsonl"
 
@@ -503,6 +509,16 @@ def pace_batch_y(pace: dict | None, default: int = 15) -> int:
     return default
 
 
+def completed_batch_gate(events: list[dict], batch_y: int, window_minutes: int) -> float:
+    """After a full Y-person batch, count X minutes from its last completed send."""
+    if not events or batch_y <= 0:
+        return 0.0
+    last = max(float(e.get("ts") or 0) for e in events)
+    people = sum(_pace_people(e) for e in events
+                 if 0 <= last - float(e.get("ts") or 0) < window_minutes * 60)
+    return last + window_minutes * 60 if people >= batch_y else 0.0
+
+
 def pace_ok(c: dict, mailbox: str) -> tuple[bool, str]:
     pace = c.get("pace") or {}
     window_m = int(pace.get("window_minutes") or 30)
@@ -513,10 +529,9 @@ def pace_ok(c: dict, mailbox: str) -> tuple[bool, str]:
         return False, "Y=0 temporarily disabled (Options「一次发多少人」=0)"
     now = time.time()
     events = [e for e in read_pace_events() if e.get("mailbox") == mailbox and e.get("status") == "sent"]
-    recent = [e for e in events if now - float(e.get("ts") or 0) <= window_m * 60]
-    recent_people = sum(_pace_people(e) for e in recent)
-    if recent_people >= max_n:
-        return False, f"pace: {recent_people}/{max_n} people in last {window_m}m"
+    batch_gate = completed_batch_gate(events, max_n, window_m)
+    if batch_gate > now:
+        return False, f"batch_complete_wait {window_m}m after last sent"
     day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     today = [e for e in events if float(e.get("ts") or 0) >= day_start]
     today_people = sum(_pace_people(e) for e in today)
@@ -576,15 +591,14 @@ def next_pace_allowed_ts(c: dict, mailbox: str) -> tuple[float, str]:
     if max_n <= 0:
         return now + 365 * 24 * 3600, "Y=0 temporarily disabled"
     events = [e for e in read_pace_events() if e.get("mailbox") == mailbox and e.get("status") == "sent"]
-    recent = [e for e in events if now - float(e.get("ts") or 0) <= window_m * 60]
     day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     today = [e for e in events if float(e.get("ts") or 0) >= day_start]
     candidates = [now]
     reason = "ok"
-    if len(recent) >= max_n:
-        oldest = min(float(e.get("ts") or 0) for e in recent)
-        candidates.append(oldest + window_m * 60)
-        reason = f"pace_window {len(recent)}/{max_n}"
+    batch_gate = completed_batch_gate(events, max_n, window_m)
+    if batch_gate > now:
+        candidates.append(batch_gate)
+        reason = f"batch_complete_wait {window_m}m after last sent"
     if len(today) >= daily:
         # next local midnight
         nxt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -654,7 +668,7 @@ def queued_emails() -> set[str]:
     out: set[str] = set()
     JOBS.mkdir(parents=True, exist_ok=True)
     for p in (list(JOBS.glob("pending-*.json")) + list(JOBS.glob("active-*.json"))
-              + list(JOBS.glob("held-*.json"))):
+              + list(JOBS.glob("held-*.json")) + list(PENDING_WRITEBACKS.glob("*.json"))):
         job = load_json(p, {})
         r = (job.get("recipient") or "").strip().lower()
         if r:
@@ -1488,6 +1502,10 @@ def _scheduler_loop() -> None:
     _scheduler_stop.wait(5)
     while not _scheduler_stop.is_set():
         try:
+            retry_pending_writebacks()
+        except Exception as e:
+            _log_schedule({"action": "writeback_retry_error", "reason": str(e)})
+        try:
             schedule_tick()
         except Exception as e:
             _log_schedule({"action": "tick_crash", "reason": str(e)})
@@ -1619,7 +1637,8 @@ def enqueue_from_feishu(count: int = 1, *, reason: str = "test") -> dict:
 
 
 def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipient: str = "",
-                      record_ids: list | None = None, recipients: list | None = None) -> dict:
+                      record_ids: list | None = None, recipients: list | None = None,
+                      sent_at: str | None = None) -> dict:
     """Writeback 发送状态/发送时间 on send success via lark-cli (Base OpenAPI v3).
 
     Must use v3 shape: update_records is {record_id: {field: value}} (NOT v1 array + fields wrapper).
@@ -1643,14 +1662,14 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file():
+    if not exe.is_file() and not relay_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
     profile = (feishu.get("profile") or "tk-outreach-local").strip()
     if not base or not table:
         return {"ok": False, "reason": "feishu_not_configured"}
-    sent_at = format_shanghai(time.time()).replace(" (Asia/Shanghai)", "")
+    sent_at = sent_at or format_shanghai(time.time()).replace(" (Asia/Shanghai)", "")
     mb = (mailbox or "").strip().lower()
     # 飞书“发送状态”是单选：中文选项已补齐（待发送/已发送/已回复/退信/可疑拦截/无邮箱跳过）。
     fields = {
@@ -1679,7 +1698,7 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
                 "--as", "bot", "--profile", profile,
                 "--json", "@" + str(path),
             ]
-            proc = subprocess.run(
+            proc = run_lark(
                 args, capture_output=True, timeout=120,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
@@ -1717,6 +1736,31 @@ def mark_feishu_sent(c: dict, *, record_id: str = "", mailbox: str = "", recipie
         return {"ok": False, "reason": str(e)}
 
 
+def retry_pending_writebacks() -> None:
+    """Keep Gmail SENT separate from Feishu writeback; retry without resending mail."""
+    if not PENDING_WRITEBACKS.is_dir():
+        return
+    for path in sorted(PENDING_WRITEBACKS.glob('*.json'))[:5]:
+        item = load_json(path, {})
+        mailbox = str(item.get('mailbox') or '').strip().lower()
+        table_id = str(item.get('feishu_table_id') or '').strip()
+        record_ids = item.get('record_ids') or []
+        if not mailbox or not re.fullmatch(r'tbl[A-Za-z0-9]+', table_id) or not record_ids:
+            continue
+        current = cfg()
+        account = find_account(current, mailbox)
+        if account:
+            current = cfg_for_account(current, account)
+        current = {**current, 'feishu': {**dict(current.get('feishu') or {}),
+                    'table_id': table_id}}
+        result = mark_feishu_sent(current, record_ids=record_ids, mailbox=mailbox,
+            recipients=item.get('recipients') or [], sent_at=item.get('sent_at'))
+        if result.get('ok'):
+            path.unlink(missing_ok=True)
+            _log_schedule({'action': 'writeback_recovered', 'job_id': item.get('job_id'),
+                           'mailbox': mailbox, 'table_id': table_id})
+
+
 def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str = "",
                         reply_at: str | None = None) -> dict:
     """把“回复时间”写回飞书（仅当该格为空，绝不覆盖 BD 手填值）。
@@ -1733,7 +1777,7 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file():
+    if not exe.is_file() and not relay_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -1746,7 +1790,7 @@ def mark_feishu_replied(c: dict, *, record_id: str, mailbox: str, recipient: str
         return {"ok": False, "reason": "gmail_reply_time_unreadable", "record_id": rid}
 
     def _cli(*args, cwd=None):
-        return subprocess.run(
+        return run_lark(
             [str(exe), "base", *args, "--base-token", base, "--table-id", table,
              "--as", "bot", "--profile", profile],
             capture_output=True, timeout=60, cwd=cwd,
@@ -1916,7 +1960,7 @@ def mark_feishu_delivery_status(
     import subprocess, os, tempfile
     feishu = _feishu_cfg(c)
     exe = _lark_exe()
-    if not exe.is_file():
+    if not exe.is_file() and not relay_enabled():
         return {"ok": False, "reason": "no_lark_cli"}
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -1929,7 +1973,7 @@ def mark_feishu_delivery_status(
         with tempfile.TemporaryDirectory(prefix="tk-sp-bounce-") as td:
             path = Path(td) / "payload.json"
             path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            proc = subprocess.run(
+            proc = run_lark(
                 [str(exe), "base", "+record-batch-update",
                  "--base-token", base, "--table-id", table,
                  "--as", "bot", "--profile", profile,
@@ -2234,6 +2278,7 @@ class Handler(BaseHTTPRequestHandler):
                     "min_gap_seconds": int(pace.get("min_gap_seconds") or 90),
                 },
                 "pending": pending_n,
+                "pending_writebacks": len(list(PENDING_WRITEBACKS.glob('*.json'))),
                 "accounts_count": len(list_accounts(c)),
                 "switch_policy": (c.get("switch_policy") or {}).get("mode") or "finish_then_next",
                 "round_status_url": "/api/round-status",
@@ -2764,6 +2809,7 @@ class Handler(BaseHTTPRequestHandler):
                     wb_recips = [str(x).strip().lower() for x in (job_snapshot.get("recipients") or []) if str(x).strip()]
                     if not wb_recips and job_snapshot.get("recipient"):
                         wb_recips = [str(job_snapshot.get("recipient")).strip().lower()]
+                    sent_at = format_shanghai(time.time()).replace(' (Asia/Shanghai)', '')
                     writeback = mark_feishu_sent(
                         c_wb,
                         record_id=wb_ids[0] if wb_ids else "",
@@ -2771,7 +2817,15 @@ class Handler(BaseHTTPRequestHandler):
                         mailbox=sent_mb or mailbox,
                         recipient=str(job_snapshot.get("recipient") or ""),
                         recipients=wb_recips,
+                        sent_at=sent_at,
                     )
+                    if not (writeback or {}).get('ok') and wb_ids:
+                        save_json(PENDING_WRITEBACKS / f'{job_id}.json', {
+                            'job_id': job_id, 'mailbox': sent_mb or mailbox,
+                            'feishu_table_id': str((c_wb.get('feishu') or {}).get('table_id') or ''),
+                            'record_ids': wb_ids, 'recipients': wb_recips,
+                            'sent_at': sent_at, 'created_at': now_iso(),
+                        })
                     scan_mb = (sent_mb or mailbox or "").strip().lower()
                     with _lock:
                         st = state()
@@ -2837,6 +2891,11 @@ class Handler(BaseHTTPRequestHandler):
                     acc_rb = find_account(c_rb, scanned_mb)
                     if acc_rb:
                         c_rb = cfg_for_account(c_rb, acc_rb)
+                    requested_table = str(scan.get("feishu_table_id") or "").strip()
+                    if requested_table and re.fullmatch(r"tbl[A-Za-z0-9]+", requested_table):
+                        c_rb = dict(c_rb)
+                        c_rb["feishu"] = {**dict(c_rb.get("feishu") or {}),
+                                           "table_id": requested_table}
                     seen_message = set()
                     # The page sends every visible external sender. The server alone
                     # decides whether it is a reply to this account's sent creator.
@@ -2919,7 +2978,7 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(item, dict):
                             bounce_rows.append(item)
                 if scanned_mb and bounce_rows:
-                    c_b = cfg()
+                    c_b = c_rb
                     bounce_writebacks = apply_bounce_classifications(
                         c_b, mailbox=scanned_mb, rows=bounce_rows)
                     if bounce_writebacks:
@@ -2990,6 +3049,13 @@ def main() -> None:
     print(f"[send-plugin] pending jobs={len(list_pending())} — schedule clock auto-enqueues BCC by pace X/Y when enabled")
     start_schedule_enqueue_clock()
     print(f"[send-plugin] schedule-enqueue clock started (tick={SCHEDULE_TICK_SECONDS}s)")
+    if (ROOT / 'config' / 'reply-relay-center.json').is_file():
+        try:
+            from reply_center_bridge import main as run_reply_center
+        except ImportError:  # pragma: no cover
+            from python.reply_center_bridge import main as run_reply_center  # type: ignore
+        threading.Thread(target=run_reply_center, name='reply-center', daemon=True).start()
+        print('[send-plugin] reply center thread started')
     httpd = ThreadingHTTPServer((host, port), Handler)
     try:
         httpd.serve_forever()

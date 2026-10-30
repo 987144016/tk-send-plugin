@@ -1,60 +1,16 @@
 {
-  "schema_version": 1,
-  "phase": 1,
-  "notes": "Copy to one-mailbox.json. Phase 1 uses active_mailbox only. Second account maps to tk邀约模板3 when email known.",
+  "schema_version": 2,
   "armed": false,
-  "active_mailbox": "zhuhaochen9303j@gmail.com",
-  "mailbox": "zhuhaochen9303j@gmail.com",
-  "template_name": "YOUR_OWN_GMAIL_TEMPLATE_NAME",
-  "template_status": "READY",
-  "forbidden_templates": [
-    "tk邀约矫正内衣"
-  ],
-  "mailboxes": {
-    "zhuhaochen9303j@gmail.com": {
-      "role": "phase1_primary",
-      "template_name": "YOUR_OWN_GMAIL_TEMPLATE_NAME",
-      "template_status": "READY",
-      "armed": false
-    },
-    "second-account@gmail.com": {
-      "role": "phase2_second",
-      "template_name": "tk邀约模板3",
-      "template_status": "NAME_RESERVED",
-      "armed": false,
-      "notes": "Jim: second Google account binds template tk邀约模板3"
-    }
-  },
-  "subject": "Tiktok paid collaboration from PoseFree Apparel",
-  "pace": {
-    "max_messages_per_window": 15,
-    "window_minutes": 30,
-    "daily_limit": 500,
-    "min_gap_seconds": 90
-  },
-  "listen": {
-    "host": "127.0.0.1",
-    "port": 8767
-  },
-  "chrome_policy": {
-    "tabs_only": true,
-    "no_new_chrome_windows": true,
-    "no_remote_debug": true,
-    "reuse_existing_gmail_tab": true
-  },
-  "token": "gmw_standalone_phase1_change_me_to_random_43chars___________",
+  "active_mailbox": "",
+  "mailbox": "",
+  "accounts": [],
+  "mailboxes": {},
+  "template_name": "",
+  "template_status": "NOT_CONFIGURED",
+  "subject": "",
+  "pace": {"max_messages_per_window": 15, "window_minutes": 30, "daily_limit": 500, "min_gap_seconds": 90},
+  "listen": {"host": "127.0.0.1", "port": 8767},
   "reply_scan": {"enabled": true, "interval_minutes": 10},
-  "reply_notify": {
-    "enabled": false,
-    "chat_id": "",
-    "profile": "tk-outreach-local",
-    "start_after": ""
-  },
-  "reply_history_table_ids": [],
-  "feishu": {
-    "table_name": "达人·test",
-    "table_id": "tblh3s12ihno8jEi",
-    "base_token": "YY5Cb3gAVaREQksZF16cJFc0nQe",
-    "wiki_token": "DsxywE9IhiYKxmkqu6Mc9VXtnaf"
-  }
+  "reply_notify": {"enabled": false, "chat_id": "", "profile": "tk-outreach-local", "start_after": ""},
+  "feishu": {"table_name": "", "table_id": "", "base_token": "", "profile": "tk-outreach-local"}
 }

@@ -69,18 +69,10 @@ async function healExtensionSession() {
 
 const SEED = [
   {
-    mailbox: 'zhuhaochen9303j@gmail.com',
-    template_name: 'tk邀约模板3',
-    feishu_table_name: 'zhuhaochen9303j@gmail.com',
-    feishu_table_id: 'tblh3s12ihno8jEi',
-    window_minutes: 30,
-    batch_size: 15,
-  },
-  {
-    mailbox: 'wuxiaoyu28le@gmail.com',
-    template_name: 'tk邀约矫正内衣',
-    feishu_table_name: 'wuxiaoyu28le@gmail.com',
-    feishu_table_id: 'tblJu7x9zCtIsa9w',
+    mailbox: '',
+    template_name: '',
+    feishu_table_name: '',
+    feishu_table_id: '',
     window_minutes: 30,
     batch_size: 15,
   },
@@ -114,8 +106,8 @@ function validateAccounts(list, active) {
     if (seen.has(a.mailbox)) throw Error('重复邮箱：' + a.mailbox);
     seen.add(a.mailbox);
     if (!a.template_name) throw Error(a.mailbox + ' 缺少 Gmail邮件模板名');
-    if (!a.feishu_table_name && !a.feishu_table_id)
-      throw Error(a.mailbox + ' 缺少飞书表名或 table_id');
+    if (!/^tbl[A-Za-z0-9]+$/.test(a.feishu_table_id || ''))
+      throw Error(a.mailbox + ' 请填写自己的飞书 table_id（tbl 开头）');
     if (!Number.isFinite(a.batch_size) || a.batch_size < 0 || a.batch_size > 100) throw Error('一次发多少人须 0–100（0=暂时禁用本号；禁止无限制群发）');
     if (a.window_minutes < 1 || a.window_minutes > 1440) throw Error('批次间隔须 1–1440 分钟');
   }
@@ -201,9 +193,9 @@ function escapeAttr(s) {
 
 function updateActiveLabel() {
   const a = accounts.find(x => x.mailbox === activeMailbox) || accounts[0];
-  el('active-label').textContent = a
+  el('active-label').textContent = a?.mailbox
     ? `${a.mailbox} · ${a.template_name} · ${a.feishu_table_name || a.feishu_table_id}`
-    : '—';
+    : '未配置（填写自己的 Gmail 和模板后保存）';
   const hint = el('active-ux-hint');
   if (hint) {
     hint.textContent = 'active=当前发件号（可轮转）。发完 Y / 表空 → 影刀式切下一号并停留；不会自动恢复上一号。共 '
@@ -565,7 +557,7 @@ async function probeHealth() {
   return j;
 }
 
-function nativeEnsureQueue() {
+function nativeCommand(command) {
   return new Promise((resolve) => {
     let port;
     try {
@@ -581,7 +573,7 @@ function nativeEnsureQueue() {
       try { port.disconnect(); } catch {}
       resolve(obj);
     };
-    const timer = setTimeout(() => finish({ok: false, error: 'native timeout', via: 'native'}), 20000);
+    const timer = setTimeout(() => finish({ok: false, error: 'native timeout', via: 'native'}), 70000);
     port.onMessage.addListener((msg) => {
       clearTimeout(timer);
       finish({...(msg || {}), via: 'native'});
@@ -592,13 +584,15 @@ function nativeEnsureQueue() {
       finish({ok: false, error: err || 'native disconnected', via: 'native'});
     });
     try {
-      port.postMessage({cmd: 'start'});
+      port.postMessage({cmd: command});
     } catch (e) {
       clearTimeout(timer);
       finish({ok: false, error: String(e), via: 'native'});
     }
   });
 }
+
+const nativeEnsureQueue = () => nativeCommand('start');
 
 function protocolEnsureQueue() {
   // Custom protocol registered by Install-NativeHost.ps1
@@ -663,6 +657,7 @@ async function refresh() {
         + ' · feishu=' + ((j.feishu && (j.feishu.table_name || j.feishu.table_id)) || '-')
         + ' · 一次最多=' + ((j.pace && (j.pace.max_messages_per_window + '人 / ' + j.pace.window_minutes + '分钟一批')) || '-')
         + ' · pending=' + j.pending
+        + (j.pending_writebacks ? ' · 飞书待写回=' + j.pending_writebacks : '')
         + ' · switch=' + (j.switch_policy || 'finish_then_next');
     } catch {
       health = '队列：离线（将自动尝试启动；也可双击「一点即运行」）';
@@ -773,6 +768,21 @@ el('connect').onclick = async () => {
   }
 };
 
+el('restart').onclick = async () => {
+  const button = el('restart');
+  button.disabled = true;
+  showToast('正在重启本地队列并应用源码更新…', 'info', 20000);
+  try {
+    const result = await nativeCommand('restart');
+    if (!result?.ok) throw Error(result?.hint || result?.error || '重启失败');
+    showToast('后台已重启，正在重新加载插件…', 'ok', 10000);
+    chrome.runtime.reload();
+  } catch (error) {
+    showToast('后台重启失败：' + (error.message || error), 'err', 20000);
+    button.disabled = false;
+  }
+};
+
 el('send-now').onclick = async () => {
   const btn = el('send-now');
   btn.disabled = true;
@@ -859,9 +869,21 @@ async function boot() {
     if (el('reply-relay-mode')) el('reply-relay-mode').style.display = '';
   }
   let loaded = null;
-  try {
-    await ensureLocalQueue();
-  } catch {}
+  let ensured = null;
+  try { ensured = await ensureLocalQueue(); } catch {}
+  if (ensured?.already) {
+    nativeCommand('update').then(result => {
+      if (result?.updated) {
+        const msg = '已从 GitHub 下载 ' + result.after + '；点「应用更新并重启后台」即可生效。';
+        el('update-hint').textContent = msg;
+        showToast(msg, 'info', 30000);
+      } else if (result?.ok === false) {
+        el('update-hint').textContent = 'GitHub 更新检查未成功：' + (result.error || '请查看 data/logs/team-update.log');
+      } else if (result?.ok) {
+        el('update-hint').textContent = '已检查 GitHub：当前为最新版本 ' + chrome.runtime.getManifest().version;
+      }
+    }).catch(() => {});
+  }
   try {
     const q = await fetchQueueConfig();
     if (q && q.settings) loaded = q.settings;
@@ -882,12 +904,16 @@ async function boot() {
       feishu_table_id: loaded.feishu_table_id || '',
       window_minutes: loaded.window_minutes || 30,
       batch_size: Math.max(0, numAllowZero(loaded.batch_size, 15)),
-    }, ...SEED.filter(s => s.mailbox !== normalizeMailbox(loaded.mailbox)).map(s => ({...s}))];
+    }];
     activeMailbox = normalizeMailbox(loaded.mailbox);
     renderAccounts();
   } else {
     accounts = SEED.map(s => ({...s}));
-    activeMailbox = SEED[0].mailbox;
+    if (loaded) {
+      accounts[0].feishu_table_name = loaded.feishu_table_name || '';
+      accounts[0].feishu_table_id = loaded.feishu_table_id || '';
+    }
+    activeMailbox = '';
     renderAccounts();
   }
   applyReplyScanUi(loaded || {reply_scan: {enabled: true, interval_minutes: 10}});

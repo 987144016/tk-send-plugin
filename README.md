@@ -79,16 +79,16 @@ python .\python\enqueue_job.py --to someone@example.com
 
 公开仓库：https://github.com/987144016/tk-send-plugin
 
-1. **自动更新（默认）**：本机是 **git clone** 时，每次**启动本地队列**都会先执行 `git pull --ff-only`：
+1. **自动更新（默认）**：Git 克隆目录启动队列时执行 `git pull --ff-only`；完整团队 ZIP 启动队列或打开选项页时从 GitHub 检查并下载较新源码，保留本机账号、队列、Python 和私有中继配置。
    - 双击 `一点即运行-发信插件.cmd`
    - Options「连接并启动」/ Native Messaging `ensure`（会走 host 的 start）
    - `scripts/Start-LocalQueue.ps1` / `Start-LocalQueue-Hidden.ps1`
-2. **拉完代码 ≠ 扩展已更新**：Chrome 未打包扩展**不会**自动热替换 JS。请打开 `chrome://extensions`，对本扩展点 **「重新加载」**，否则新前端逻辑不会生效。队列进程若已在跑，Python 侧改动也需再启一次队列才会加载新代码。
-3. **手动兜底**：双击包根目录 `Update-SendPlugin.ps1`（同样 `git pull --ff-only` → 打印 VERSION → 提示重新加载）。首次若还没有 clone：`git clone https://github.com/987144016/tk-send-plugin.git`。
+2. **下载后应用**：Chrome 未打包扩展不会自行热替换 JS。选项页点击「应用更新并重启后台」会在没有正在发送的邮件时重启本地队列，并调用 `chrome.runtime.reload()` 加载新扩展代码。
+3. **手动兜底**：Git 克隆目录运行 `Update-SendPlugin.ps1`；团队 ZIP 运行 `scripts/Update-Team-OnStart.ps1`，结果在 `data/team-update-result.json` 与 `data/logs/team-update.log`。
 
-同事一句话：启动队列会自动 pull；**记得在 chrome://extensions 重新加载扩展**；不行就跑 `Update-SendPlugin.ps1` 再 reload。
+同事首次需要完整团队 ZIP 安装 Native Host，以后打开插件会检查 GitHub 更新；点「应用更新并重启后台」即可加载新版本，不再每版分发安装包。
 
-版本见根目录 `VERSION`（当前 0.3.17-reply-relay）。
+版本见根目录 `VERSION`。
 
 Gmail 账号页签：已经按账号打开的页签保持原样；缺少页签时插件自动打开 Gmail 并点击账号菜单切到目标账号，读回当前登录邮箱后才领该号任务。切号若弹出新页签，会关闭插件刚开的临时页，流程结束后每个已配置账号最多保留一个插件管理的页签。
 

@@ -48,4 +48,33 @@ const exhausted = await gmailPage('prepare', {
 assert.equal(clicked, 2);
 assert.equal(exhausted.error, 'gmail_draft_restore_failed',
   'a draft that cannot expand stops rather than waiting indefinitely');
+const visibleBody = document.createElement('div');
+visibleBody.setAttribute('contenteditable', 'true');
+visibleBody.setAttribute('role', 'textbox');
+visibleBody.textContent = 'Visible draft body';
+document.querySelector('[role="dialog"]').appendChild(visibleBody);
+const withVisibleBody = await gmailPage('prepare', {
+  sender: 'sender@gmail.com', recipient: 'creator@gmail.com',
+  recipient_mode: 'bcc', recipients: ['creator@gmail.com'], job_id: 'job123',
+});
+assert.equal(clicked, 2, 'an available visible body must not trigger another maximize click');
+assert.notEqual(withVisibleBody.error, 'gmail_draft_restore_failed');
+visibleBody.remove();
+document.querySelector('[role="dialog"]').dataset.gmwRestoreTries = '2';
+const close = document.createElement('button');
+close.setAttribute('aria-label', 'Save & close');
+let closed = 0;
+close.click = () => { closed++; };
+document.querySelector('[role="dialog"]').appendChild(close);
+const recovered = await gmailPage('prepare', {
+  sender: 'sender@gmail.com', recipient: 'creator@gmail.com',
+  recipient_mode: 'bcc', recipients: ['creator@gmail.com'], job_id: 'job123',
+});
+assert.equal(closed, 1);
+assert.equal(recovered.waiting, true);
+const stillStuck = await gmailPage('prepare', {
+  sender: 'sender@gmail.com', recipient: 'creator@gmail.com',
+  recipient_mode: 'bcc', recipients: ['creator@gmail.com'], job_id: 'job123',
+});
+assert.equal(stillStuck.error, 'gmail_draft_restore_failed');
 console.log('preparing a minimized matching draft clicks Gmail maximize once');

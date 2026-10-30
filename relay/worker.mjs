@@ -19,14 +19,14 @@ export default {
         return respond({ok: false, error: 'forbidden'}, 403);
       return relay.fetch(request);
     }
-    if (path !== '/events' || request.method !== 'POST')
+    if (!['/events', '/feishu'].includes(path) || request.method !== 'POST')
       return respond({ok: false, error: 'not_found'}, 404);
     if (!env.CLIENT_KEY || request.headers.get('authorization') !== 'Bearer ' + env.CLIENT_KEY)
       return respond({ok: false, error: 'unauthorized'}, 401);
     const body = await request.text();
     if (new TextEncoder().encode(body).length > 128 * 1024)
       return respond({ok: false, error: 'too_large'}, 413);
-    return relay.fetch(new Request('https://relay.internal/events', {
+    return relay.fetch(new Request('https://relay.internal' + path, {
       method: 'POST', headers: {'content-type': 'application/json'}, body,
     }));
   },
@@ -47,7 +47,7 @@ export class ReplyRelay {
       this.ctx.acceptWebSocket(pair[1], ['host']);
       return new Response(null, {status: 101, webSocket: pair[0]});
     }
-    if (path !== '/events') return respond({ok: false}, 404);
+    if (!['/events', '/feishu'].includes(path)) return respond({ok: false}, 404);
     if (!host) return respond({ok: false, error: 'center_offline'}, 503);
     if (this.pending.size >= 8) return respond({ok: false, error: 'center_busy'}, 429);
     const body = await request.text();
@@ -58,7 +58,7 @@ export class ReplyRelay {
         resolve(respond({ok: false, error: 'center_timeout'}, 504));
       }, 90000);
       this.pending.set(id, {resolve, timer});
-      try { host.send(JSON.stringify({id, body})); }
+      try { host.send(JSON.stringify({id, body, kind: path === '/feishu' ? 'feishu_cli' : 'reply'})); }
       catch {
         clearTimeout(timer);
         this.pending.delete(id);

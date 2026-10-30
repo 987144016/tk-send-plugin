@@ -1,42 +1,38 @@
-# Install Chrome Native Messaging host so Options「连接并启动」can auto-start 8767 queue.
+﻿param([string]$ExtensionId = '')
+# Install Chrome Native Messaging host for this extracted bundle's extension.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $HostDir = Join-Path $Root "native-host"
-$Exe = Join-Path $HostDir "tk_send_queue_host.exe"
 $Bat = Join-Path $HostDir "tk_send_queue_host.bat"
-$HostBin = if (Test-Path -LiteralPath $Exe) { $Exe } else { $Bat }
+$HostBin = $Bat
 $ManifestPath = Join-Path $HostDir "com.tk.outreach.sendqueue.json"
 $HostName = "com.tk.outreach.sendqueue"
 
 # Discover unpacked extension id(s) that load this package's extension\
-$ExtPathNeedle = (Join-Path $Root "extension").ToLowerInvariant().Replace('\','/')
+$ExtPathNeedle = [IO.Path]::GetFullPath((Join-Path $Root "extension")).TrimEnd('\','/').ToLowerInvariant().Replace('\','/')
 $ids = New-Object System.Collections.Generic.List[string]
-# Always include known company-PC id; installer also scans Chrome Secure Preferences
-$ids.Add("hihflgcoijhafhcdcgfejnmjcofgifon") | Out-Null
+if ($ExtensionId -match '^[a-p]{32}$') { $ids.Add($ExtensionId) | Out-Null }
 
 $chromeBase = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data"
 if (Test-Path $chromeBase) {
   Get-ChildItem $chromeBase -Directory | ForEach-Object {
-    $sp = Join-Path $_.FullName "Secure Preferences"
-    if (-not (Test-Path $sp)) { return }
-    try {
-      $raw = Get-Content -LiteralPath $sp -Raw -Encoding UTF8
-      $d = $raw | ConvertFrom-Json
-      $settings = $d.extensions.settings
-      if (-not $settings) { return }
-      $settings.PSObject.Properties | ForEach-Object {
-        $eid = $_.Name
-        $path = [string]$_.Value.path
-        if (-not $path) { return }
-        $norm = $path.ToLowerInvariant().Replace('\','/')
-        if ($norm.Contains("send-plugin/extension") -or $norm.EndsWith("/extension") -and $norm.Contains("tiktok-outreach")) {
-          if (-not $ids.Contains($eid)) { $ids.Add($eid) | Out-Null }
+    foreach ($pref in @('Secure Preferences', 'Preferences')) {
+      $sp = Join-Path $_.FullName $pref
+      if (-not (Test-Path $sp)) { continue }
+      try {
+        $d = Get-Content -LiteralPath $sp -Raw -Encoding UTF8 | ConvertFrom-Json
+        $settings = $d.extensions.settings
+        if (-not $settings) { continue }
+        $settings.PSObject.Properties | ForEach-Object {
+          $eid = $_.Name
+          $path = [string]$_.Value.path
+          if (-not $path -or $eid -notmatch '^[a-p]{32}$') { return }
+          try { $norm = [IO.Path]::GetFullPath($path).TrimEnd('\','/').ToLowerInvariant().Replace('\','/') }
+          catch { return }
+          if ($norm -eq $ExtPathNeedle -and -not $ids.Contains($eid)) { $ids.Add($eid) | Out-Null }
         }
-        if ($norm -eq $ExtPathNeedle -or $norm.Contains("packages/send-plugin/extension")) {
-          if (-not $ids.Contains($eid)) { $ids.Add($eid) | Out-Null }
-        }
-      }
-    } catch {}
+      } catch {}
+    }
   }
 }
 
@@ -45,7 +41,7 @@ foreach ($id in $ids) {
   if ($id -and $id.Length -ge 32) { $origins += ("chrome-extension://" + $id + "/") }
 }
 if ($origins.Count -eq 0) {
-  Write-Error "No Chrome extension id found for send-plugin. Load unpacked extension first, then re-run Install-NativeHost.ps1"
+  throw "Chrome has not loaded this bundle's extension folder yet: $ExtPathNeedle. In chrome://extensions select the bundle's extension folder, then run the launcher again."
 }
 
 $batPath = (Resolve-Path -LiteralPath $HostBin).Path

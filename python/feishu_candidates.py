@@ -61,6 +61,12 @@ def _lark_exe() -> Path:
     return Path(os.environ.get("APPDATA", "")) / "npm/node_modules/@larksuite/cli/bin/lark-cli.exe"
 
 
+try:
+    from feishu_cli import relay_enabled, run_lark
+except ImportError:  # pragma: no cover
+    from python.feishu_cli import relay_enabled, run_lark  # type: ignore
+
+
 def _feishu_cfg(c: dict) -> dict:
     feishu = dict(c.get("feishu") or {})
     if not feishu.get("base_token") or not feishu.get("table_id"):
@@ -191,7 +197,7 @@ def _configured_tables(c: dict) -> list[dict]:
 
 def _list_records(feishu: dict, *, timeout: float = LIST_TIMEOUT_SEC) -> list[dict]:
     exe = _lark_exe()
-    if not exe.is_file():
+    if not exe.is_file() and not relay_enabled():
         raise RuntimeError("未找到飞书官方 CLI（lark-cli）")
     base = (feishu.get("base_token") or "").strip()
     table = (feishu.get("table_id") or "").strip()
@@ -210,7 +216,7 @@ def _list_records(feishu: dict, *, timeout: float = LIST_TIMEOUT_SEC) -> list[di
                 "--format", "ndjson", "--limit", "2000",
                 "--offset", str(offset), "--output", str(out), "--overwrite",
             ]
-            proc = subprocess.run(
+            proc = run_lark(
                 args, capture_output=True, timeout=timeout,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )

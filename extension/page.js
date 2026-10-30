@@ -169,7 +169,8 @@ export async function gmailPage(action,job){
   if(action==='prepare'){
     if(!compose){const button=buttons(document).find(e=>/^(写邮件|撰写|Compose)$/i.test(text(e)));if(!button)return {waiting:true,stage:'等待 Gmail 写信按钮'};button.click();return {waiting:true,stage:'正在打开 Gmail 写信窗口'};}
     const subject=compose.querySelector('input[name="subjectbox"]');
-    const body=compose.querySelector('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="邮件正文"], [contenteditable="true"][aria-label="Message Body"]');
+    const bodyFields=[...compose.querySelectorAll('[contenteditable="true"][role="textbox"], [contenteditable="true"][aria-label="邮件正文"], [contenteditable="true"][aria-label="Message Body"]')];
+    const body=bodyFields.find(visible)||bodyFields[0];
     const to=compose.querySelector('input[name="to"],textarea[name="to"],input[role="combobox"][aria-label*="收件"],input[role="combobox"][aria-label*="To"],input[peoplekit-id]');
     if(!body)return {waiting:true,stage:'等待 Gmail 邮件正文控件'};
     if(!bulk&&!to)return {waiting:true,stage:'等待 Gmail 收件人控件'};
@@ -177,7 +178,15 @@ export async function gmailPage(action,job){
       const restore=buttons(compose).filter(e=>/^(最大化|Maximize)$/i.test(e.getAttribute('aria-label')||''));
       if(restore.length!==1)return {waiting:true,stage:'正在等待本任务的 Gmail 草稿展开'};
       const tries=Number(compose.dataset.gmwRestoreTries||'0');
-      if(tries>=2)return {error:'gmail_draft_restore_failed'};
+      if(tries>=2){
+        const close=compose.querySelector('[aria-label="保存并关闭"],[aria-label="Save & close"],[data-tooltip="Save & close"]');
+        if(close&&!compose.dataset.gmwRestoreClose&&!compose.dataset.gmwClicked){
+          compose.dataset.gmwRestoreClose='1';
+          close.click();
+          return {waiting:true,stage:'无法展开草稿，已保存并关闭；准备新写信窗口'};
+        }
+        return {error:'gmail_draft_restore_failed'};
+      }
       compose.dataset.gmwRestoreTries=String(tries+1);
       restore[0].click();
       return {waiting:true,stage:'已点击最大化，等待本任务的 Gmail 草稿展开'};
@@ -358,7 +367,7 @@ export async function gmailPage(action,job){
   }
   if(action==='send'){
     if(!compose||compose.dataset.gmwJob!==job.job_id)return {error:'prepared_draft_missing'};
-    const body=compose.querySelector('[contenteditable="true"][role="textbox"]');
+    const body=[...compose.querySelectorAll('[contenteditable="true"][role="textbox"]')].find(visible);
     const recipients=addressList(compose);
     const addressProof=bulk?envelope(compose):null;
     if(!body||compose.dataset.gmwHash!==await digest(body.innerHTML)||compose.querySelector('input[name="subjectbox"]').value!==job.subject||!matches(recipients,expected)||bulk&&(pendingAddresses(compose)||addressProof.to.length||addressProof.cc.length||!matches(addressProof.bcc,expected)))return {error:'compose_changed_before_click'};
@@ -369,7 +378,7 @@ export async function gmailPage(action,job){
   }
   if(action==='submitted')return {submitted:!compose&&/已发送|邮件已发送|Message sent/i.test(document.body.innerText),sender};
   if(action==='snapshot'){
-    const body=compose?.querySelector('[contenteditable="true"][role="textbox"]');
+    const body=[...(compose?.querySelectorAll('[contenteditable="true"][role="textbox"]')||[])].find(visible);
     if(!body||compose.dataset.gmwJob!==job.job_id||compose.dataset.gmwHash!==await digest(body.innerHTML))return {error:'prepared_snapshot_changed'};
     const addressProof=bulk?envelope(compose):null;
     if(bulk&&(pendingAddresses(compose)||addressProof.to.length||addressProof.cc.length||!matches(addressProof.bcc,expected)))return {error:'bcc_envelope_changed'};

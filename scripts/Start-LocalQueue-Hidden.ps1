@@ -2,16 +2,21 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
-# Auto-update (simple): git pull --ff-only when this is a clone; never blocks start
-& "$Root\scripts\Try-GitPullOnStart.ps1" | Out-Null
+# Updates never block starting the local queue.
+if (Test-Path -LiteralPath (Join-Path $Root '.git')) {
+  & "$Root\scripts\Try-GitPullOnStart.ps1" | Out-Null
+} elseif (Test-Path -LiteralPath (Join-Path $Root 'scripts\Update-Team-OnStart.ps1')) {
+  & "$Root\scripts\Update-Team-OnStart.ps1" | Out-Null
+}
 $health = "http://127.0.0.1:8767/api/health"
 try {
   $r = Invoke-WebRequest -Uri $health -TimeoutSec 2 -UseBasicParsing
-  if ($r.StatusCode -eq 200) { exit 0 }
+  if ($r.StatusCode -eq 200) { return }
 } catch {}
 
 function Find-Pythonw {
   $cands = @(
+    "$Root\runtime\pythonw.exe",
     "$env:LOCALAPPDATA\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\pythonw.exe",
     "$env:LOCALAPPDATA\Microsoft\WindowsApps\pythonw.exe"
   )
@@ -20,7 +25,7 @@ function Find-Pythonw {
   if ($cmd) { return $cmd.Source }
   $cmd = Get-Command python -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
-  throw "pythonw/python not found"
+  throw "Python runtime missing. Please use the complete team package containing runtime\\pythonw.exe"
 }
 
 $python = Find-Pythonw
@@ -34,7 +39,7 @@ for ($i=0; $i -lt 40; $i++) {
   Start-Sleep -Milliseconds 250
   try {
     $r = Invoke-WebRequest -Uri $health -TimeoutSec 2 -UseBasicParsing
-    if ($r.StatusCode -eq 200) { exit 0 }
+    if ($r.StatusCode -eq 200) { return }
   } catch {}
 }
-exit 0
+throw "Queue did not become healthy at $health. See data\\logs\\queue-stderr.log"

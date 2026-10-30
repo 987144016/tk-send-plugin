@@ -75,7 +75,7 @@ def _pick_pythonw() -> str:
 
 
 def start_queue() -> dict:
-    """Best-effort git pull (if clone), then ensure local queue is running."""
+    """Best-effort source update, then ensure local queue is running."""
     if (ROOT / ".git").exists():
         pull_info = _run_git_pull()
         log(
@@ -83,7 +83,7 @@ def start_queue() -> dict:
             % (pull_info.get("ok"), pull_info.get("local") or "", pull_info.get("error") or "")
         )
     else:
-        pull_info = {"ok": True, "skipped": True, "reason": "not_git_clone"}
+        pull_info = _run_team_update()
 
     h = health()
     if h and h.get("ok"):
@@ -122,15 +122,38 @@ def stop_queue() -> dict:
     ps1 = ROOT / "scripts" / "Stop-LocalQueue.ps1"
     if ps1.is_file() and os.name == "nt":
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)],
                 capture_output=True, timeout=15,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
+            if result.returncode != 0:
+                return {"ok": False, "error": "queue_stop_failed"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
     h = health()
     return {"ok": True, "running": bool(h and h.get("ok"))}
+
+
+def restart_queue() -> dict:
+    """Apply downloaded backend code only when no Gmail send is in progress."""
+    state_file = ROOT / 'data' / 'queue-state.json'
+    try:
+        current = json.loads(state_file.read_text(encoding='utf-8')).get('current')
+    except FileNotFoundError:
+        current = None
+    if current:
+        return {"ok": False, "error": "send_in_progress", "hint": "Wait for the current Gmail receipt"}
+    stopped = stop_queue()
+    if not stopped.get('ok'):
+        return stopped
+    for _ in range(20):
+        if not health():
+            break
+        time.sleep(0.25)
+    if health():
+        return {"ok": False, "error": "queue_did_not_stop"}
+    return start_queue()
 
 
 
@@ -162,29 +185,47 @@ def _run_git_pull() -> dict:
     return {"ok": True, "method": "git_pull", "output": out, "local": read_local_version()}
 
 
+def _run_team_update() -> dict:
+    """Fetch newer public source for a ZIP install; keep local/private files."""
+    script = ROOT / "scripts" / "Update-Team-OnStart.ps1"
+    if not script.is_file():
+        return {"ok": False, "error": "team_updater_missing"}
+    before = read_local_version()
+    try:
+        proc = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden", "-File", str(script)], cwd=str(ROOT),
+            capture_output=True, timeout=65,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__}
+    result_path = ROOT / "data" / "team-update-result.json"
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception:
+        result = {"ok": False, "error": "update_result_missing"}
+    return {**result, "method": "team_update", "before": before,
+            "after": result.get("after") or read_local_version()}
+
+
 def pull_update() -> dict:
-    """Manual/native pull. Git clone only; zip overlay removed for simplicity."""
+    """Manual/native update for both Git clones and private team ZIPs."""
     before = read_local_version()
     if not (ROOT / ".git").exists():
-        return {
-            "ok": False,
-            "error": "not_git_clone",
-            "hint": "git clone https://github.com/987144016/tk-send-plugin.git or run Update-SendPlugin.ps1",
-            "before": before,
-        }
-    result = _run_git_pull()
+        result = _run_team_update()
+    else:
+        result = _run_git_pull()
     if not result.get("ok"):
         return result
     after = read_local_version()
     return {
         "ok": True,
         "updated": before != after,
-        "method": "git_pull",
+        "method": result.get("method") or "git_pull",
         "before": before,
         "after": after,
         "output": result.get("output"),
         "reload_extension": True,
-        "hint": "open chrome://extensions and Reload this extension — new JS will not apply until reload",
+        "hint": "click Apply update and restart in Options to load new backend and extension code",
     }
 
 
@@ -212,6 +253,8 @@ def main() -> int:
                 write_msg(start_queue())
             elif cmd == "stop":
                 write_msg(stop_queue())
+            elif cmd == "restart":
+                write_msg(restart_queue())
             elif cmd in ("pull", "update", "apply_update", "check_update", "check-update"):
                 write_msg(pull_update())
             else:

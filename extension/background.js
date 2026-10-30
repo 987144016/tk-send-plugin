@@ -7,6 +7,7 @@ import {withReplyDetailTab, cleanupReplyDetailTab} from './reply-detail-tab.mjs'
 import {newReplyBodyCandidates, markReplyBodyRead} from './reply-body-baseline.mjs';
 
 const NATIVE_HOST = 'com.tk.outreach.sendqueue';
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 let lastNativeEnsureAt = 0;
 
 async function probeQueueHealth() {
@@ -23,7 +24,7 @@ function nativeStartQueue() {
     catch (e) { resolve({ok: false, error: String(e)}); return; }
     let done = false;
     const finish = (o) => { if (done) return; done = true; try { port.disconnect(); } catch {} resolve(o); };
-    const t = setTimeout(() => finish({ok: false, error: 'timeout'}), 15000);
+    const t = setTimeout(() => finish({ok: false, error: 'timeout'}), 70000);
     port.onMessage.addListener((msg) => { clearTimeout(t); finish(msg || {ok: true}); });
     port.onDisconnect.addListener(() => {
       clearTimeout(t);
@@ -63,7 +64,15 @@ async function relayTick() {
 }
 async function captureForRelay(mailbox, scan) {
   if (!REPLY_RELAY_URL || !REPLY_RELAY_KEY) return;
-  await captureReplyEvents(chrome.storage.local, mailbox, scan);
+  const saved = await chrome.storage.local.get(['accounts', 'settings']);
+  let accounts = saved.accounts || saved.settings?.accounts || [];
+  if (!accounts.length) {
+    try { accounts = (await (await fetch(ORIGIN + '/api/config')).json()).settings?.accounts || []; }
+    catch { accounts = []; }
+  }
+  const tableId = accounts.find(a => String(a.mailbox || '').toLowerCase() === mailbox.toLowerCase())?.feishu_table_id || '';
+  if (!/^tbl[A-Za-z0-9]+$/.test(tableId)) return;
+  await captureReplyEvents(chrome.storage.local, mailbox, scan, tableId);
   relayTick();
 }
 const read = () => chrome.storage.local.get(

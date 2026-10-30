@@ -30,4 +30,8 @@ const accepted = await worker.fetch(new Request('https://relay.example/events', 
 }), env);
 assert.equal(accepted.status, 200);
 assert.equal((await accepted.json()).accepted, true);
+const feishu = await worker.fetch(new Request('https://relay.example/feishu', {
+  method: 'POST', headers, body: JSON.stringify({op: 'feishu_cli', command: '+record-list'}),
+}), env);
+assert.equal(feishu.status, 200);
 console.log('relay rejects unknown clients and reports center-offline without accepting events');

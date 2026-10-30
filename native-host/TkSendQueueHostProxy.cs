@@ -15,6 +15,7 @@ namespace TkSend {
 
     static string FindPythonw(string dir) {
       string[] candidates = new string[] {
+        Path.Combine(Directory.GetParent(dir).FullName, "runtime", "pythonw.exe"),
         Path.Combine(dir, "pythonw.exe"),
         Environment.ExpandEnvironmentVariables("%LOCALAPPDATA%\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\pythonw.exe"),
         Environment.ExpandEnvironmentVariables("%LOCALAPPDATA%\\Microsoft\\WindowsApps\\pythonw.exe"),

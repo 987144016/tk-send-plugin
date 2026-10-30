@@ -4,7 +4,7 @@ const candidate = reply => reply?.body_verified === true
   && !reply.bounce_kind
   && !/mailer-daemon|postmaster|no.?reply|notification@/i.test(reply.from || '');
 
-export async function captureReplyEvents(storage, mailbox, scan) {
+export async function captureReplyEvents(storage, mailbox, scan, tableId = '') {
   const bag = await storage.get(['replyRelayOutbox', 'replyRelaySeen', 'replyRelayBaseline']);
   const outbox = {...(bag.replyRelayOutbox || {})};
   const seen = {...(bag.replyRelaySeen || {})};
@@ -20,7 +20,7 @@ export async function captureReplyEvents(storage, mailbox, scan) {
   for (const r of rows) {
     const key = eventKey(mailbox, r);
     if (!candidate(r) || seen[key] || outbox[key]) continue;
-    outbox[key] = {mailbox, reply: {
+    outbox[key] = {mailbox, table_id: tableId, reply: {
       from: r.from, subject: r.subject, snippet: r.snippet,
       at: r.at, message_id: r.message_id, thread_id: r.thread_id,
       thread_url: r.thread_url, body: r.body, body_verified: true,
@@ -44,12 +44,13 @@ export async function flushReplyEvents(storage, relayUrl, relayKey, fetcher = fe
     const response = await fetcher(relayUrl.replace(/\/$/, '') + '/events', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + relayKey},
-      body: JSON.stringify({mailbox: item.mailbox, reply: item.reply}),
+      body: JSON.stringify({mailbox: item.mailbox, table_id: item.table_id, reply: item.reply}),
       signal: AbortSignal.timeout(100000),
     });
     const result = await response.json();
     if (response.ok && result.ok === true &&
-        ['sent', 'duplicate'].includes(result.status) && result.feishu_message_id) {
+        (result.status === 'historical_skipped' ||
+         (['sent', 'duplicate'].includes(result.status) && result.feishu_message_id))) {
       delete outbox[key];
       await storage.set({replyRelayOutbox: outbox,
         replyRelayLastResult: {at: Date.now(), status: result.status,
