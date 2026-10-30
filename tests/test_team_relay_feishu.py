@@ -24,7 +24,7 @@ class TeamRelayFeishuTests(unittest.TestCase):
                 def __exit__(self, *_):
                     pass
 
-            with patch.object(feishu_cli, "TEAM_RELAY", config), patch.object(
+            with patch.object(feishu_cli, "direct_enabled", return_value=False), patch.object(feishu_cli, "TEAM_RELAY", config), patch.object(
                 feishu_cli.urllib.request, "urlopen", return_value=Response()
             ), patch.object(feishu_cli.json, "load", return_value={"ok": True,
                 "returncode": 0, "stdout": '{"has_more":false}',

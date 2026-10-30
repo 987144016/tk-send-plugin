@@ -7,10 +7,11 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not (Test-Path -LiteralPath (Join-Path $PythonRuntime 'pythonw.exe'))) {
   throw "Bundled Python runtime not found: $PythonRuntime"
 }
-$outBase = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $Root 'dist' }
+$outBase = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $Root 'dist\ready-to-send' }
 New-Item -ItemType Directory -Path $outBase -Force | Out-Null
 $version = (Get-Content -LiteralPath (Join-Path $Root 'extension\manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
-$out = Join-Path $outBase ('TK-Send-Team-v' + $version + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$name = 'TK-Send-Team-v' + $version + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+$out = Join-Path $Root ('data\build\' + $name)
 New-Item -ItemType Directory -Path $out | Out-Null
 foreach ($name in @('extension','python','native-host','scripts','config','runtime','data\jobs','data\logs')) {
   New-Item -ItemType Directory -Path (Join-Path $out $name) -Force | Out-Null
@@ -55,11 +56,11 @@ TK Send Plugin 团队版安装（Windows + Chrome）
 2. 把管理员单独发的 team-feishu.json 放进本包 extension 子文件夹，与 manifest.json 同级。以后更新会保留它。
 3. Chrome 打开 chrome://extensions，开启开发者模式，加载已解压的扩展程序：选择本包的 extension 子文件夹。
 4. 双击包根目录的「一点即运行-发信插件.cmd」。成功时无黑色常驻窗口；失败会弹出具体原因，日志在 data\logs\setup-result.txt。
-5. 点击插件图标打开选项，填自己的 Gmail、自己的 Gmail 模板名称、自己数据表的 table_id（tbl 开头）。保存参数，点「连接并启动」。
+5. 点击插件图标打开选项，填自己的 Gmail、自己的 Gmail 模板名称、自己的飞书表名。保存时自动查找 table_id，再点「连接并启动」。
 
 包内自带 Python、时区数据、本地队列、Native Host。电脑不需要安装 Python、飞书 CLI 或影刀。飞书表读写直接连接飞书，不依赖管理员电脑。team-feishu.json 含团队凭据，只单独发给可信同事，不上传 GitHub。
 '@
 [IO.File]::WriteAllText((Join-Path $out '安装说明.txt'), $guide, $utf8)
-$zip = $out + '.zip'
+$zip = Join-Path $outBase ($name + '.zip')
 Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip
 Write-Output ('Complete public team installer: ' + $zip)

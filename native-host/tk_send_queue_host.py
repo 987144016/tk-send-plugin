@@ -75,15 +75,8 @@ def _pick_pythonw() -> str:
 
 
 def start_queue() -> dict:
-    """Best-effort source update, then ensure local queue is running."""
-    if (ROOT / ".git").exists():
-        pull_info = _run_git_pull()
-        log(
-            "git pull on start ok=%s local=%s err=%s"
-            % (pull_info.get("ok"), pull_info.get("local") or "", pull_info.get("error") or "")
-        )
-    else:
-        pull_info = _run_team_update()
+    """Ensure the local queue is running without waiting on GitHub."""
+    pull_info = {"deferred_to_options": True}
 
     h = health()
     if h and h.get("ok"):

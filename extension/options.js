@@ -1,5 +1,6 @@
 import {ORIGIN} from './protocol.js';
 import {REPLY_RELAY_URL, REPLY_RELAY_KEY} from './relay-config.js';
+import {chooseInitialSettings} from './options-state.mjs';
 
 const el = id => document.getElementById(id);
 
@@ -87,14 +88,18 @@ function normalizeMailbox(v) {
 
 function readAccountsFromDom() {
   const nodes = [...document.querySelectorAll('.acct')];
-  return nodes.map(node => ({
-    mailbox: normalizeMailbox(node.querySelector('.f-mailbox').value),
-    template_name: (node.querySelector('.f-template').value || '').trim(),
-    feishu_table_name: (node.querySelector('.f-table-name').value || '').trim(),
-    feishu_table_id: (node.querySelector('.f-table-id').value || '').trim(),
-    window_minutes: Math.max(1, parseInt(node.querySelector('.f-x').value, 10) || 30),
-    batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? Math.max(0, n) : 15; })(),
-  }));
+  return nodes.map((node, idx) => {
+    const tableName = (node.querySelector('.f-table-name').value || '').trim();
+    const previous = accounts[idx] || {};
+    return {
+      mailbox: normalizeMailbox(node.querySelector('.f-mailbox').value),
+      template_name: (node.querySelector('.f-template').value || '').trim(),
+      feishu_table_name: tableName,
+      feishu_table_id: tableName === previous.feishu_table_name ? (previous.feishu_table_id || '') : '',
+      window_minutes: Math.max(1, parseInt(node.querySelector('.f-x').value, 10) || 30),
+      batch_size: (() => { const n = parseInt(node.querySelector('.f-y').value, 10); return Number.isFinite(n) ? Math.max(0, n) : 15; })(),
+    };
+  });
 }
 
 function validateAccounts(list, active) {
@@ -106,8 +111,8 @@ function validateAccounts(list, active) {
     if (seen.has(a.mailbox)) throw Error('重复邮箱：' + a.mailbox);
     seen.add(a.mailbox);
     if (!a.template_name) throw Error(a.mailbox + ' 缺少 Gmail邮件模板名');
-    if (!/^tbl[A-Za-z0-9]+$/.test(a.feishu_table_id || ''))
-      throw Error(a.mailbox + ' 请填写自己的飞书 table_id（tbl 开头）');
+    if (!a.feishu_table_name)
+      throw Error(a.mailbox + ' 请填写飞书表名');
     if (!Number.isFinite(a.batch_size) || a.batch_size < 0 || a.batch_size > 100) throw Error('一次发多少人须 0–100（0=暂时禁用本号；禁止无限制群发）');
     if (a.window_minutes < 1 || a.window_minutes > 1440) throw Error('批次间隔须 1–1440 分钟');
   }
@@ -143,13 +148,10 @@ function renderAccounts() {
           <input class="f-template" type="text" value="${escapeAttr(a.template_name)}" placeholder="Gmail邮件模板名">
           <div class="hint">禁止填别人邮箱的模板</div>
         </div>
-        <div>
+        <div class="full">
           <label>飞书表名</label>
-          <input class="f-table-name" type="text" value="${escapeAttr(a.feishu_table_name)}">
-        </div>
-        <div>
-          <label>飞书 table_id</label>
-          <input class="f-table-id" type="text" value="${escapeAttr(a.feishu_table_id)}" placeholder="tbl…">
+          <input class="f-table-name" type="text" value="${escapeAttr(a.feishu_table_name)}" placeholder="填写自己的飞书数据表名称">
+          <div class="hint">保存时自动查找对应数据表</div>
         </div>
         <div>
           <label>一次发多少人（上限）</label>
@@ -288,6 +290,7 @@ async function saveSettings({requireQueue = false} = {}) {
   let queueNote = '队列离线：已只写入扩展本地；连接并启动会自动拉起队列';
   try {
     const data = await pushQueueConfig(settings);
+    if (data.settings) await persistLocal(data.settings);
     queueNote = '已同步 config/one-mailbox.json · active=' + (data.mailbox || settings.mailbox)
       + ' · accounts=' + (settings.accounts || []).length;
     if (Array.isArray(data.settings?.accounts) && data.settings.accounts.length) {
@@ -370,6 +373,7 @@ let ensureInFlight = null;
 
 function formatEtaDisplay(j) {
   if (!j) return '—';
+  if (j.accounts_count === 0) return '未配置发信账号；请填写 Gmail、模板和飞书表后保存';
   if (j.armed === false) return '发信已锁定（armed=false）；恢复后重算';
   if (j.paused === true || j.next_round_eta_label === '已暂停' || j.next_round_eta_human === '已暂停') {
     return '已暂停';
@@ -403,9 +407,11 @@ async function applyRoundPayload(j) {
   const summary = el('schedule-summary');
   if (!eta) return;
   const localPaused = await isManualPaused();
-  const locked = j?.armed === false;
-  const paused = !!(j && (j.paused === true || localPaused || locked));
-  const pauseLabel = locked ? '发信已锁定（armed=false）；恢复后重算' : '已暂停';
+  const unconfigured = j?.accounts_count === 0;
+  const locked = j?.armed === false && !unconfigured;
+  const paused = !!(j && (j.paused === true || localPaused || locked || unconfigured));
+  const pauseLabel = unconfigured ? '未配置发信账号；请填写 Gmail、模板和飞书表后保存' :
+    (locked ? '发信已锁定（armed=false）；恢复后重算' : '已暂停');
   const view = paused ? {
     ...j,
     paused: true,
@@ -435,7 +441,7 @@ async function applyRoundPayload(j) {
     ? pauseLabel
     : (String(view.next_round_count ?? 0) + ' 人'
       + (view.next_round_count_note ? '（' + view.next_round_count_note + '）' : ''));
-  rem.textContent = view.feishu_error && view.remaining_unsent == null
+  rem.textContent = unconfigured ? '—（尚未配置账号）' : view.feishu_error && view.remaining_unsent == null
     ? ('读取失败：' + view.feishu_error)
     : String(view.remaining_unsent ?? '—') + (view.remaining_stale ? '（缓存）' : '');
   const rows = Array.isArray(view.accounts_schedule) ? view.accounts_schedule : [];
@@ -658,7 +664,8 @@ async function refresh() {
         + ' · 一次最多=' + ((j.pace && (j.pace.max_messages_per_window + '人 / ' + j.pace.window_minutes + '分钟一批')) || '-')
         + ' · pending=' + j.pending
         + (j.pending_writebacks ? ' · 飞书待写回=' + j.pending_writebacks : '')
-        + ' · switch=' + (j.switch_policy || 'finish_then_next');
+        + ' · switch=' + (j.switch_policy || 'finish_then_next')
+        + (j.feishu_config_error ? ' · 飞书配置错误：' + j.feishu_config_error : '');
     } catch {
       health = '队列：离线（将自动尝试启动；也可双击「一点即运行」）';
     }
@@ -872,7 +879,7 @@ async function boot() {
   let loaded = null;
   let ensured = null;
   try { ensured = await ensureLocalQueue(); } catch {}
-  if (ensured?.already) {
+  if (ensured?.ok) {
     nativeCommand('update').then(result => {
       if (result?.updated) {
         const msg = '已从 GitHub 下载 ' + result.after + '；点「应用更新并重启后台」即可生效。';
@@ -885,15 +892,16 @@ async function boot() {
       }
     }).catch(() => {});
   }
+  const local = await loadLocal();
+  let queueSettings = null;
   try {
     const q = await fetchQueueConfig();
-    if (q && q.settings) loaded = q.settings;
+    if (q?.settings) queueSettings = q.settings;
   } catch {}
-  if (!loaded) {
-    const local = await loadLocal();
-    loaded = local.settings || null;
-    if (Array.isArray(local.accounts) && local.accounts.length)
-      loaded = {...(loaded || {}), accounts: local.accounts, active_mailbox: local.active_mailbox || loaded?.mailbox};
+  const initial = chooseInitialSettings(queueSettings, local);
+  loaded = initial.settings;
+  if (initial.restoredLocal) {
+    el('update-hint').textContent = '已恢复扩展本地保存的账号；队列尚未配置，请点「保存参数」同步。';
   }
   if (loaded && Array.isArray(loaded.accounts) && loaded.accounts.length) {
     applyServerAccounts(loaded);

@@ -25,13 +25,15 @@ def config() -> dict:
     if not enabled():
         raise FileNotFoundError('team-feishu.json is missing beside extension/manifest.json')
     value = json.loads(TEAM_FILE.read_text(encoding='utf-8-sig'))
+    if not isinstance(value, dict):
+        raise ValueError('team-feishu.json must contain a JSON object')
     if not all(str(value.get(k) or '').strip() for k in ('app_id', 'app_secret', 'base_token')):
         raise ValueError('team-feishu.json needs app_id, app_secret and base_token')
     return value
 
 
 def _post_json(url: str, body: dict, *, token: str = '', timeout: float = 30) -> dict:
-    headers = {'Content-Type': 'application/json', 'User-Agent': 'TK-Send-Plugin/0.3.22'}
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'TK-Send-Plugin/0.3.23'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
     request = urllib.request.Request(url,
@@ -69,7 +71,7 @@ def _api(method: str, path: str, *, data: dict | None = None,
     request = urllib.request.Request(url, payload, {
         'Authorization': 'Bearer ' + _tenant_token(),
         'Content-Type': 'application/json',
-        'User-Agent': 'TK-Send-Plugin/0.3.22',
+        'User-Agent': 'TK-Send-Plugin/0.3.23',
     }, method=method)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         result = json.load(response)
@@ -81,6 +83,33 @@ def _api(method: str, path: str, *, data: dict | None = None,
 def _record_path(base_token: str, table_id: str) -> str:
     return '/bitable/v1/apps/%s/tables/%s/records' % (
         urllib.parse.quote(base_token, safe=''), urllib.parse.quote(table_id, safe=''))
+
+
+def list_tables(base_token: str) -> list[dict]:
+    rows = []
+    page_token = ''
+    path = '/bitable/v1/apps/%s/tables' % urllib.parse.quote(base_token, safe='')
+    while True:
+        params = {'page_size': 100}
+        if page_token:
+            params['page_token'] = page_token
+        data = _api('GET', path, params=params)
+        rows.extend(data.get('items') or [])
+        if not data.get('has_more'):
+            return rows
+        nxt = str(data.get('page_token') or '')
+        if not nxt or nxt == page_token:
+            raise RuntimeError('Feishu table pagination stopped without advancing')
+        page_token = nxt
+
+
+def resolve_table_id(base_token: str, table_name: str) -> str:
+    name = str(table_name or '').strip()
+    matches = [str(item.get('table_id') or '') for item in list_tables(base_token)
+               if str(item.get('name') or '').strip() == name]
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError('飞书表名“%s”匹配到 %d 张表；请核对表名' % (name, len(matches)))
+    return matches[0]
 
 
 def list_records(base_token: str, table_id: str) -> list[dict]:

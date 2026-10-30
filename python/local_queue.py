@@ -94,13 +94,17 @@ def cfg() -> dict:
             from feishu_direct import config as direct_config
         except ImportError:  # pragma: no cover
             from python.feishu_direct import config as direct_config  # type: ignore
-        private = direct_config()
-        c["feishu"] = {**(c.get("feishu") or {}), "base_token": private["base_token"]}
-        if private.get("chat_id"):
-            c["reply_notify"] = {**(c.get("reply_notify") or {}),
-                "enabled": bool(private.get("notify_enabled", False)),
-                "chat_id": str(private["chat_id"]),
-                "start_after": str(private.get("notify_start_after") or "")}
+        try:
+            private = direct_config()
+        except (OSError, ValueError, AttributeError) as exc:
+            c["feishu_config_error"] = str(exc)
+        else:
+            c["feishu"] = {**(c.get("feishu") or {}), "base_token": private["base_token"]}
+            if private.get("chat_id"):
+                c["reply_notify"] = {**(c.get("reply_notify") or {}),
+                    "enabled": bool(private.get("notify_enabled", False)),
+                    "chat_id": str(private["chat_id"]),
+                    "start_after": str(private.get("notify_start_after") or "")}
     return c
 
 
@@ -218,6 +222,18 @@ def settings_view(c: dict) -> dict:
     }
 
 
+def resolve_configured_table_id(c: dict, name: str) -> str:
+    try:
+        from feishu_direct import config as direct_config, resolve_table_id
+    except ImportError:  # pragma: no cover
+        from python.feishu_direct import config as direct_config, resolve_table_id  # type: ignore
+    try:
+        base_token = direct_config()["base_token"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise ValueError('按表名查找需要完整的 extension/team-feishu.json：' + str(exc)) from exc
+    return resolve_table_id(base_token, name)
+
+
 def apply_settings(body: dict) -> dict:
     """Merge Options payload into one-mailbox.json (supports accounts[])."""
     with _lock:
@@ -258,6 +274,8 @@ def apply_settings(body: dict) -> dict:
                 tid = (raw.get("feishu_table_id") or "").strip()
                 if not tname and not tid:
                     raise ValueError(f"feishu table_name or table_id required for {mailbox}")
+                if not tid:
+                    tid = resolve_configured_table_id(c, tname)
                 cleaned.append({
                     "mailbox": mailbox,
                     "template_name": template,
@@ -344,6 +362,8 @@ def apply_settings(body: dict) -> dict:
             feishu["table_id"] = str(body.get("feishu_table_id") or "").strip()
         if not feishu.get("table_name") and not feishu.get("table_id"):
             raise ValueError("feishu table_name or table_id required")
+        if not feishu.get("table_id"):
+            feishu["table_id"] = resolve_configured_table_id(c, feishu["table_name"])
         pace = dict(c.get("pace") or {})
         if "window_minutes" in body:
             wm = int(body.get("window_minutes") or 0)
@@ -2292,6 +2312,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 "pending": pending_n,
                 "pending_writebacks": len(list(PENDING_WRITEBACKS.glob('*.json'))),
+                "feishu_config_error": c.get("feishu_config_error") or "",
                 "accounts_count": len(list_accounts(c)),
                 "switch_policy": (c.get("switch_policy") or {}).get("mode") or "finish_then_next",
                 "round_status_url": "/api/round-status",

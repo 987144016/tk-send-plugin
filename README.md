@@ -79,14 +79,14 @@ python .\python\enqueue_job.py --to someone@example.com
 
 公开仓库：https://github.com/987144016/tk-send-plugin
 
-1. **自动更新（默认）**：Git 克隆目录启动队列时执行 `git pull --ff-only`；完整团队 ZIP 启动队列或打开选项页时从 GitHub 检查并下载较新源码，保留本机账号、队列、Python 和扩展目录里的 `team-feishu.json`。
+1. **自动更新（默认）**：先让本地队列上线；打开选项页后自动从 GitHub 检查较新源码，保留本机账号、队列、Python 和扩展目录里的 `team-feishu.json`。首次启动不等待网络更新。
    - 双击 `一点即运行-发信插件.cmd`
    - Options「连接并启动」/ Native Messaging `ensure`（会走 host 的 start）
    - `scripts/Start-LocalQueue.ps1` / `Start-LocalQueue-Hidden.ps1`
 2. **下载后应用**：Chrome 未打包扩展不会自行热替换 JS。选项页点击「应用更新并重启后台」会在没有正在发送的邮件时重启本地队列，并调用 `chrome.runtime.reload()` 加载新扩展代码。
 3. **手动兜底**：Git 克隆目录运行 `Update-SendPlugin.ps1`；团队 ZIP 运行 `scripts/Update-Team-OnStart.ps1`，结果在 `data/team-update-result.json` 与 `data/logs/team-update.log`。
 
-同事首次需要完整团队 ZIP 安装 Native Host，并把管理员单独发送的 `team-feishu.json` 放到 Chrome「加载已解压的扩展程序」选中的 `extension` 文件夹，和 `manifest.json` 同级。以后打开插件会检查 GitHub 更新；点「应用更新并重启后台」即可加载新版本，不再每版分发安装包。私有文件不在 GitHub 或公开 ZIP 中，更新会保留它。
+同事首次需要完整团队 ZIP 安装 Native Host，并把管理员单独发送的 `team-feishu.json` 放到 Chrome「加载已解压的扩展程序」选中的 `extension` 文件夹，和 `manifest.json` 同级。选项页只填自己的 Gmail、模板和飞书表名，保存时自动匹配并保存 table_id。以后打开插件会检查 GitHub 更新；点「应用更新并重启后台」即可加载新版本，不再每版分发安装包。私有文件不在 GitHub 或公开 ZIP 中，更新会保留它。若一键启动失败，错误弹窗和 `data/logs/setup-result.txt` 会给出具体原因；若 Chrome 加载了其他目录的扩展，队列仍会先启动。可发送的 ZIP 只放在 `dist/ready-to-send/`；构建中间目录在 `data/build/`。
 
 版本见根目录 `VERSION`。
 

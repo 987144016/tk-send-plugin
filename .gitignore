@@ -9,6 +9,7 @@ data/queue-state.json
 data/sent-pace.jsonl
 data/*.jsonl
 data/reply-center-bridge.lock
+data/build/
 *.log
 *.log.*
 

@@ -2,12 +2,8 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
-# Updates never block starting the local queue.
-if (Test-Path -LiteralPath (Join-Path $Root '.git')) {
-  & "$Root\scripts\Try-GitPullOnStart.ps1" | Out-Null
-} elseif (Test-Path -LiteralPath (Join-Path $Root 'scripts\Update-Team-OnStart.ps1')) {
-  & "$Root\scripts\Update-Team-OnStart.ps1" | Out-Null
-}
+# The Options page checks GitHub after the queue is online. Network checks
+# must not delay the first local start.
 $health = "http://127.0.0.1:8767/api/health"
 try {
   $r = Invoke-WebRequest -Uri $health -TimeoutSec 2 -UseBasicParsing
@@ -29,7 +25,8 @@ function Find-Pythonw {
 }
 
 $python = Find-Pythonw
-$argList = @("$Root\python\local_queue.py", "--config", "$Root\config\one-mailbox.json")
+$argList = '"' + (Join-Path $Root 'python\local_queue.py') + '" --config "' +
+  (Join-Path $Root 'config\one-mailbox.json') + '"'
 $stdout = Join-Path $Root "data\logs\queue-stdout.log"
 $stderr = Join-Path $Root "data\logs\queue-stderr.log"
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "data\logs") | Out-Null

@@ -23,7 +23,7 @@ class OptionsPreservationTests(unittest.TestCase):
                               "pace": {"window_minutes": 30, "max_messages_per_window": 0}}],
                 "active_mailbox": "sender@gmail.com",
             }), encoding="utf-8")
-            with patch.object(local_queue, "DEFAULT_CONFIG", config_path):
+            with patch.object(local_queue, "DEFAULT_CONFIG", config_path), patch.object(local_queue, "direct_enabled", return_value=False):
                 local_queue.apply_settings({
                     "accounts": [{"mailbox": "sender@gmail.com", "template_name": "own template",
                                   "feishu_table_name": "sender", "feishu_table_id": "tblCurrent123",
