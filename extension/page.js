@@ -20,6 +20,12 @@ export async function gmailPage(action,job){
   const visible=e=>!!(e&&e.getClientRects().length);
   const buttons=root=>[...root.querySelectorAll('[role="button"],button')].filter(visible);
   const text=e=>(e?.innerText||e?.textContent||'').trim();
+  if(action==='inspect_template_menu'){
+    const nodes=[...document.querySelectorAll('[role="menu"],[role^="menuitem"],.J-M,.J-N,.J-N-Jz')].filter(visible);
+    return {inspected:true,frame:location.origin+location.pathname,menu_count:nodes.length,
+      menus:nodes.slice(0,50).map(e=>({tag:e.tagName,role:e.getAttribute('role'),
+        class:e.className,text:text(e).slice(0,200),html:e.outerHTML.slice(0,900)}))};
+  }
   const accountButton=[...document.querySelectorAll('[aria-label]')].find(e=>/Google (账号|Account)/i.test(e.getAttribute('aria-label')||'')&&/@/.test(e.getAttribute('aria-label')));
   const sender=accountButton?.getAttribute('aria-label')?.match(/[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com/i)?.[0]?.toLowerCase();
   if(action==='switch_account'){
@@ -329,7 +335,10 @@ export async function gmailPage(action,job){
         if(!target){target=items.find(e=>/^(模板|Templates)(?:\s*[►▶▸›])?$/i.test(text(e)));step='templates';}
         if(!target){target=[...compose.querySelectorAll('[aria-label="更多选项"],[aria-label="More options"]')].find(visible);step='more';}
         if(!target)return {waiting:true,stage:'正在等待 Gmail 模板菜单加载'};
-        if(step==='choose')compose.dataset.gmwTemplateRequested=job.gmail_template_name;
+        if(step==='choose'){
+          compose.dataset.gmwTemplateRequested=job.gmail_template_name;
+          delete compose.dataset.gmwTemplateHoverTries;
+        }
         for(const old of document.querySelectorAll('[data-gmw-target]'))
           if(old.dataset.gmwTarget===job.job_id+'-'+step)delete old.dataset.gmwTarget;
         target.dataset.gmwTarget=job.job_id+'-'+step;
@@ -339,10 +348,18 @@ export async function gmailPage(action,job){
           const rect=target.getBoundingClientRect();
           const mouse={bubbles:true,cancelable:true,view:window,button:0,clientX:rect.x+rect.width/2,clientY:rect.y+rect.height/2};
           target.dispatchEvent(new MouseEvent('mouseover',{...mouse,buttons:0}));
-          target.dispatchEvent(new MouseEvent('mousedown',{...mouse,buttons:1}));
-          target.dispatchEvent(new MouseEvent('mouseup',{...mouse,buttons:0}));
+          target.dispatchEvent(new MouseEvent('mouseenter',{...mouse,bubbles:false,buttons:0}));
+          target.dispatchEvent(new MouseEvent('mousemove',{...mouse,buttons:0}));
+          if(step!=='templates'){
+            target.dispatchEvent(new MouseEvent('mousedown',{...mouse,buttons:1}));
+            target.dispatchEvent(new MouseEvent('mouseup',{...mouse,buttons:0}));
+          }
         }
-        target.click();
+        if(step==='templates'){
+          const tries=Number(compose.dataset.gmwTemplateHoverTries||'0')+1;
+          compose.dataset.gmwTemplateHoverTries=String(tries);
+          if(tries>=3) target.click();
+        }else target.click();
         return {waiting:true,stage:step==='more'?'正在打开 Gmail 更多选项':step==='templates'?'正在打开 Gmail 模板菜单':'正在插入 Gmail 已保存模板：'+job.gmail_template_name};
       }
       if(text(body).length<20)return {waiting:true,stage:'正在等待 Gmail 已保存模板加载完成'};

@@ -6,7 +6,7 @@ import {ensureGmailAccountTabs} from './gmail-tabs.mjs';
 import {withReplyDetailTab, cleanupReplyDetailTab} from './reply-detail-tab.mjs';
 import {newReplyBodyCandidates, markReplyBodyRead} from './reply-body-baseline.mjs';
 import {mayReloadBeforeCompose} from './send-stall.mjs';
-import {pausedPreSendReceipt} from './pause-recovery.mjs';
+import {pausedPreSendReceipt, sendingStateAfterHeal} from './pause-recovery.mjs';
 
 const NATIVE_HOST = 'com.tk.outreach.sendqueue';
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
@@ -54,6 +54,29 @@ async function ensureQueueRunning() {
 
 
 let running = false, runningSince = 0, timer;
+let lastTemplateDiagnosticAt = 0, lastTemplateDiagnosticRequest = '';
+async function inspectRequestedTemplateMenu(config, requestId) {
+  if (!requestId || !config?.token || requestId === lastTemplateDiagnosticRequest ||
+      Date.now() - lastTemplateDiagnosticAt < 10000) return;
+  lastTemplateDiagnosticAt = Date.now();
+  const tabs = await chrome.tabs.query({url: 'https://mail.google.com/*'});
+  const snapshots = [];
+  for (const tab of tabs) {
+    try {
+      const values = await chrome.scripting.executeScript({
+        target: {tabId: tab.id, allFrames: true}, func: gmailPage,
+        args: ['inspect_template_menu', {}],
+      });
+      for (const value of values || [])
+        if (value.result?.inspected && value.result.menu_count)
+          snapshots.push({tabId: tab.id, frameId: value.frameId, ...value.result});
+    } catch {}
+  }
+  if (!snapshots.length) return;
+  await api(config.token, 'diag', {note: 'template_menu_snapshot',
+    extra: {request_id: requestId, extension_version: chrome.runtime.getManifest().version, snapshots}});
+  lastTemplateDiagnosticRequest = requestId;
+}
 let relayRunning = false;
 async function relayTick() {
   if (!REPLY_RELAY_URL || !REPLY_RELAY_KEY || relayRunning) return;
@@ -206,8 +229,7 @@ async function healSession(existingClientId) {
     account_id: data.account_id || 'multi-active',
     sender: data.sender || data.mailbox,
     template_name: data.template_name || '',
-    enabled: true,
-    manualPaused: false,
+    ...sendingStateAfterHeal(prevBag.config, data),
     reply_scan: prevRs,
   };
   await chrome.storage.local.set({config, client_id, lastError: null, replyScanSettings: prevRs});
@@ -231,7 +253,7 @@ async function api(token, name, body, _retried) {
     try { await fetch(ORIGIN + '/api/browser-mail/worker/state', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + healed.config.token},
-      body: JSON.stringify({enabled: true}),
+      body: JSON.stringify({enabled: healed.config.enabled}),
       signal: AbortSignal.timeout(12000),
     }); } catch {}
     return api(healed.config.token, name, body, true);
@@ -640,6 +662,14 @@ async function tick() {
     let stored = await read();
     config = stored.config;
     current = stored.current;
+    // A stopped queue must also stop DOM preparation; token refresh must not resume it.
+    let queueHealth;
+    try { queueHealth = await probeQueueHealth(); } catch { return; }
+    if (queueHealth.enabled === false && config?.enabled) {
+      config = {...config, enabled: false, manualPaused: true};
+      await chrome.storage.local.set({config});
+    }
+    await inspectRequestedTemplateMenu(config, queueHealth.template_menu_diagnostic);
     if (current?.receipt) { await finish(config, current); return; }
     // Resume deferred inbox scan (send→scan→switch) if tab was not ready at finish time.
     if (!current && stored.inboxScanPending && config?.token) {

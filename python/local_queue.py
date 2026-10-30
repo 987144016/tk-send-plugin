@@ -2342,6 +2342,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {
                 "ok": True,
                 "phase": 1,
+                "enabled": bool(state().get("enabled")),
+                "template_menu_diagnostic": str(load_json(DATA / "template-menu-diagnostic.json", {}).get("request_id") or ""),
                 "armed": bool(entry.get("armed")),
                 "mailbox": mailbox,
                 "template_name": entry.get("template_name") or "",
@@ -2397,6 +2399,7 @@ class Handler(BaseHTTPRequestHandler):
                     "template_name": entry.get("template_name") or "",
                     "armed": bool(entry.get("armed")),
                     "pending": pending_n,
+                    "enabled": bool(state().get("enabled")),
                     "at": now_iso(),
                     "note": "会话已刷新；扩展应用此 token 后即可拉取 pending",
                 })
@@ -2519,6 +2522,11 @@ class Handler(BaseHTTPRequestHandler):
                     LOGS.mkdir(parents=True, exist_ok=True)
                     with (LOGS / "extension-diag.log").open("a", encoding="utf-8") as f:
                         f.write(json.dumps({"at": now_iso(), **body}, ensure_ascii=False) + "\n")
+                    if body.get("note") == "template_menu_snapshot":
+                        request = DATA / "template-menu-diagnostic.json"
+                        if (load_json(request, {}).get("request_id") ==
+                                (body.get("extra") or {}).get("request_id")):
+                            request.unlink(missing_ok=True)
                 except Exception:
                     pass
                 self._json(200, {"ok": True, "pending": len(list_pending())})
@@ -2749,6 +2757,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if name == "permit":
                 # Phase-1: local permit after extension snapshot; still no mass-send unless job queued.
+                if not state().get("enabled"):
+                    self._json(409, {"detail": "send paused; no click permission"})
+                    return
                 snap = body.get("prepared_snapshot") or {}
                 tname = (snap.get("template_name") or "").strip()
                 # Re-bind again from body.sender (multi-tab) so own Options template is never forbidden.

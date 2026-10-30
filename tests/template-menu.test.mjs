@@ -74,4 +74,33 @@ const missing = await gmailPage('prepare', {...job, gmail_template_name: 'missin
 assert.equal(missing.error, 'gmail_template_not_found', 'an open saved-template list reports an absent name');
 assert.equal(moreClicks, 0, 'missing template does not reopen the menu');
 
+menu.remove();
+delete compose.dataset.gmwTemplateRequested;
+const rootMenu = document.createElement('div');
+rootMenu.className = 'J-M';
+rootMenu.innerHTML = '<div class="J-N"><div class="J-N-Jz">模板</div></div>';
+document.body.appendChild(rootMenu);
+const parent = rootMenu.firstElementChild;
+let parentClicks = 0;
+parent.click = () => { parentClicks++; document.querySelector('#template-submenu')?.remove(); };
+parent.addEventListener('mouseenter', () => {
+  if (document.querySelector('#template-submenu')) return;
+  const sub = document.createElement('div');
+  sub.id = 'template-submenu';
+  sub.className = 'J-M';
+  sub.innerHTML = '<div class="J-N"><div class="J-N-Jz">插入模板</div></div><div class="J-N"><div class="J-N-Jz">tk邀约模板2</div></div>';
+  document.body.appendChild(sub);
+  sub.lastElementChild.click = () => { savedClicks++; };
+});
+const openSubmenu = await gmailPage('prepare', {...job, gmail_template_name: 'tk邀约模板2'});
+assert.equal(openSubmenu.waiting, true);
+assert.ok(document.querySelector('#template-submenu'), 'hovering Templates opens its submenu');
+assert.equal(parentClicks, 0, 'clicking the parent must not collapse the submenu');
+const insertAfterHover = await gmailPage('prepare', {...job, gmail_template_name: 'tk邀约模板2'});
+assert.equal(insertAfterHover.waiting, true);
+assert.equal(savedClicks, 2, 'the newly opened submenu template is selected');
+const diagnostic = await gmailPage('inspect_template_menu', {});
+assert.ok(diagnostic.menus.some(row => row.text === 'tk邀约模板2'));
+assert.equal(savedClicks, 2, 'menu diagnostics never select or send');
+
 console.log('Gmail saved template menu accepts a unique ellipsized long name');
