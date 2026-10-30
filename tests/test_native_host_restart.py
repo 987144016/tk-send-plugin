@@ -37,6 +37,22 @@ class NativeRestartTests(unittest.TestCase):
             stop.assert_called_once()
             start.assert_called_once()
 
+    def test_owner_restart_consolidates_old_reply_center(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'data').mkdir()
+            (root / 'config').mkdir()
+            (root / 'scripts').mkdir()
+            (root / 'config' / 'reply-relay-center.json').write_text('{}', encoding='utf-8')
+            (root / 'scripts' / 'Stop-Legacy-Reply-Center.ps1').write_text('', encoding='utf-8')
+            with patch.object(host, 'ROOT', root), \
+                 patch.object(host, 'stop_queue', return_value={'ok': True}), \
+                 patch.object(host, 'health', return_value=None), \
+                 patch.object(host, 'start_queue', return_value={'ok': True}), \
+                 patch.object(host.subprocess, 'run', return_value=type('Result', (), {'returncode': 0})()) as run:
+                self.assertTrue(host.restart_queue()['ok'])
+            self.assertIn('Stop-Legacy-Reply-Center.ps1', ' '.join(run.call_args.args[0]))
+
 
 if __name__ == '__main__':
     unittest.main()

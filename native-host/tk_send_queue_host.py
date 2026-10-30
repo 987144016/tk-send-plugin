@@ -147,13 +147,26 @@ def restart_queue() -> dict:
     stopped = stop_queue()
     if not stopped.get('ok'):
         return stopped
+    center_warning = None
+    if (ROOT / 'config' / 'reply-relay-center.json').is_file():
+        legacy_script = ROOT / 'scripts' / 'Stop-Legacy-Reply-Center.ps1'
+        if legacy_script.is_file():
+            legacy = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy',
+                'Bypass', '-WindowStyle', 'Hidden', '-File', str(legacy_script)],
+                capture_output=True, timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            if legacy.returncode != 0:
+                center_warning = 'old_reply_center_did_not_stop'
     for _ in range(20):
         if not health():
             break
         time.sleep(0.25)
     if health():
         return {"ok": False, "error": "queue_did_not_stop"}
-    return start_queue()
+    started = start_queue()
+    if center_warning:
+        started['center_warning'] = center_warning
+    return started
 
 
 

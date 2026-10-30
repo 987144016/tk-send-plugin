@@ -775,6 +775,7 @@ el('restart').onclick = async () => {
   try {
     const result = await nativeCommand('restart');
     if (!result?.ok) throw Error(result?.hint || result?.error || '重启失败');
+    if (result.center_warning) throw Error('发信后台已重启，但飞书中心旧进程未退出：' + result.center_warning);
     showToast('后台已重启，正在重新加载插件…', 'ok', 10000);
     chrome.runtime.reload();
   } catch (error) {
