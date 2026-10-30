@@ -807,6 +807,8 @@ def pending_job_breakdown(mailbox: str | None = None) -> dict:
     """Split pending/active into test(立即发送) vs schedule(定时Y)."""
     test_n = 0
     sched_n = 0
+    active_test = 0
+    active_schedule = 0
     want = (mailbox or "").strip().lower()
     for p in list(JOBS.glob("pending-*.json")) + list(JOBS.glob("active-*.json")):
         j = load_json(p, {})
@@ -816,9 +818,15 @@ def pending_job_breakdown(mailbox: str | None = None) -> dict:
         reason = (j.get("enqueue_reason") or "").strip().lower()
         if reason in ("test", "test_per_account", "immediate_test"):
             test_n += 1
+            if p.name.startswith("active-"):
+                active_test += 1
         else:
             sched_n += 1
-    return {"test_pending": test_n, "schedule_pending": sched_n, "pending_jobs": test_n + sched_n}
+            if p.name.startswith("active-"):
+                active_schedule += 1
+    return {"test_pending": test_n, "schedule_pending": sched_n,
+            "active_test": active_test, "active_schedule": active_schedule,
+            "pending_jobs": test_n + sched_n}
 
 def pending_jobs_for_mailbox(mailbox: str) -> int:
     mb = (mailbox or "").strip().lower()
@@ -852,7 +860,8 @@ def account_pace(c: dict, account: dict) -> dict:
 def _armed_eta_fields(*, remaining: int, next_count: int, allowed_ts: float, now: float,
                       pending_n: int, mailbox: str, is_active: bool, feishu_err: str | None,
                       rotate_eta: float | None = None, paused: bool = False,
-                      test_pending: int = 0, schedule_pending: int = 0) -> tuple[float | None, str, str]:
+                      test_pending: int = 0, schedule_pending: int = 0,
+                      active_n: int = 0, window_minutes: int = 0) -> tuple[float | None, str, str]:
     """Return (eta_ts, eta_label, eta_human).
 
     Never stamp wall-clock "now" as 下一轮. When ready: 「已启动，约 X 分钟后发 Y 人（当前号）」.
@@ -875,8 +884,16 @@ def _armed_eta_fields(*, remaining: int, next_count: int, allowed_ts: float, now
         human = f"约 {mins} 分钟后轮到本号发 {next_count} 人（{short}）"
         return eta_ts, label, human
     if pending_n > 0:
+        if active_n > 0:
+            human = (f"本封正在 Gmail 处理，尚未确认发出（当前号 {short}）；"
+                     f"下一轮在本封实际发出后隔 {window_minutes} 分钟计算")
+            return None, "正在处理本封；待 Gmail 发出回执", human
         tp = int(test_pending or 0)
         sp = int(schedule_pending or 0)
+        if allowed_ts > now + 1:
+            mins = max(1, int((allowed_ts - now + 59) // 60))
+            human = f"已入队 {pending_n} 封；最早约 {mins} 分钟后发（当前号 {short}）"
+            return allowed_ts, "已入队，等待节奏窗口", human
         if tp > 0 and sp == 0:
             label = "测发队列待发（立即发送·每号1封密送Y人；≠定时Y）"
             human = f"测发待发 {tp} 封密送（立即发送·每号1封Y人；当前号 {short}）· 定时下一轮仍是 {next_count} 人/窗"
@@ -885,7 +902,7 @@ def _armed_eta_fields(*, remaining: int, next_count: int, allowed_ts: float, now
             human = f"测发待发 {tp} + 定时待发 {sp}（当前号 {short}）· 定时Y={next_count}"
         else:
             label = "定时队列待发（按 Y；非立即测发）"
-            human = f"定时待发 {pending_n} 封（Y轮；当前号 {short}）"
+            human = f"定时待发 {pending_n} 封，计划时间已到；等待 Gmail 页签接单（当前号 {short}）"
         return None, label, human
     if allowed_ts > now + 1:
         mins = max(1, int((allowed_ts - now + 59) // 60))
@@ -918,6 +935,7 @@ def build_account_schedule_row(c: dict, account: dict, *, is_active: bool, rotat
         pending_n=pending_n, mailbox=mb, is_active=is_active, feishu_err=feishu_err,
         rotate_eta=None if is_active else rotate_eta, paused=paused,
         test_pending=br["test_pending"], schedule_pending=br["schedule_pending"],
+        active_n=br["active_test"] + br["active_schedule"], window_minutes=pace["window_minutes"],
     )
     if y_disabled:
         eta_ts = None
@@ -949,6 +967,8 @@ def build_account_schedule_row(c: dict, account: dict, *, is_active: bool, rotat
         "pending_jobs": pending_n,
         "test_pending": br["test_pending"],
         "schedule_pending": br["schedule_pending"],
+        "active_test": br["active_test"],
+        "active_schedule": br["active_schedule"],
         "schedule_next_count": next_count,
         "pace_reason": pace_reason,
         "feishu_error": feishu_err,
@@ -984,6 +1004,7 @@ def build_round_status() -> dict:
         pending_n=pending_active or pending_n, mailbox=mailbox, is_active=True,
         feishu_err=feishu_err, paused=paused,
         test_pending=br_active.get("test_pending", 0), schedule_pending=br_active.get("schedule_pending", 0),
+        active_n=br_active.get("active_test", 0) + br_active.get("active_schedule", 0), window_minutes=window_m,
     )
     if paused:
         eta_ts = None
@@ -1016,6 +1037,7 @@ def build_round_status() -> dict:
                 pending_n=pending_active or pending_n, mailbox=mailbox, is_active=True,
                 feishu_err=feishu_err, paused=paused,
                 test_pending=br_active.get("test_pending", 0), schedule_pending=br_active.get("schedule_pending", 0),
+                active_n=br_active.get("active_test", 0) + br_active.get("active_schedule", 0), window_minutes=window_m,
             )
             if paused:
                 eta_ts = None
@@ -1103,6 +1125,8 @@ def build_round_status() -> dict:
         "pending_active": pending_active,
         "test_pending": (br_all.get("test_pending", 0) if isinstance(br_all, dict) else 0),
         "schedule_pending": (br_all.get("schedule_pending", 0) if isinstance(br_all, dict) else 0),
+        "active_test": (br_all.get("active_test", 0) if isinstance(br_all, dict) else 0),
+        "active_schedule": (br_all.get("active_schedule", 0) if isinstance(br_all, dict) else 0),
         "schedule_next_count": next_count,
         "test_send_note": "立即发送=按Y人密送一封测发；与定时批次分开显示",
         "pace_reason": pace_reason,

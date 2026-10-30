@@ -135,8 +135,6 @@ def restart_queue() -> dict:
         current = json.loads(state_file.read_text(encoding='utf-8')).get('current')
     except FileNotFoundError:
         current = None
-    if current:
-        return {"ok": False, "error": "send_in_progress", "hint": "Wait for the current Gmail receipt"}
     stopped = stop_queue()
     if not stopped.get('ok'):
         return stopped
@@ -157,6 +155,8 @@ def restart_queue() -> dict:
     if health():
         return {"ok": False, "error": "queue_did_not_stop"}
     started = start_queue()
+    if current:
+        started['current_preserved'] = True
     if center_warning:
         started['center_warning'] = center_warning
     return started

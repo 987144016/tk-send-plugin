@@ -12,16 +12,22 @@ spec.loader.exec_module(host)
 
 
 class NativeRestartTests(unittest.TestCase):
-    def test_does_not_interrupt_active_gmail_send(self):
+    def test_active_job_survives_backend_restart(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'data').mkdir()
             (root / 'data' / 'queue-state.json').write_text(
                 json.dumps({'current': {'job_id': 'job1'}}), encoding='utf-8')
-            with patch.object(host, 'ROOT', root), patch.object(host, 'stop_queue') as stop:
+            with patch.object(host, 'ROOT', root), \
+                 patch.object(host, 'stop_queue', return_value={'ok': True}) as stop, \
+                 patch.object(host, 'health', return_value=None), \
+                 patch.object(host, 'start_queue', return_value={'ok': True}) as start:
                 result = host.restart_queue()
-            self.assertEqual(result['error'], 'send_in_progress')
-            stop.assert_not_called()
+            self.assertTrue(result['ok'])
+            self.assertTrue(result['current_preserved'])
+            self.assertEqual(json.loads((root / 'data' / 'queue-state.json').read_text(encoding='utf-8'))['current']['job_id'], 'job1')
+            stop.assert_called_once()
+            start.assert_called_once()
 
     def test_idle_queue_restarts_once(self):
         with tempfile.TemporaryDirectory() as folder:

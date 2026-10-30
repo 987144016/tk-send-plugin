@@ -506,7 +506,10 @@ async function applyRoundPayload(j) {
             ? ('<div>队列：'
               + (row.test_pending ? ('<strong>即将发/正在发 ' + row.test_pending + '</strong>（立即发送·每号1封密送Y人·不等切号/不等节奏）') : '')
               + (row.test_pending && (row.schedule_pending || (row.pending_jobs && !row.test_pending)) ? ' · ' : '')
-              + (row.schedule_pending ? ('定时待发 ' + row.schedule_pending) : (!row.test_pending && row.pending_jobs ? ('pending ' + row.pending_jobs) : ''))
+              + (row.active_schedule ? ('定时处理中 ' + row.active_schedule) : '')
+              + (row.schedule_pending > (row.active_schedule || 0)
+                ? ((row.active_schedule ? ' · ' : '') + '定时待发 ' + (row.schedule_pending - (row.active_schedule || 0)))
+                : (!row.test_pending && !row.active_schedule && row.pending_jobs ? ('pending ' + row.pending_jobs) : ''))
               + ' <span style="opacity:.75">≠ 上方「下一批最多」</span></div>')
             : '')
           + '</div>';
@@ -523,7 +526,10 @@ async function applyRoundPayload(j) {
       paused ? '' : (c.rotation_note || view.active_ux_note || ''),
       (!paused && c.next_after_active_eta) ? ('预计切到下一号时间：' + c.next_after_active_eta) : '',
       view.test_pending ? ('即将发/正在发：' + view.test_pending + '（立即发送·每号1封密送Y人·多标签页各发本号）') : '',
-      view.schedule_pending ? ('定时待发：' + view.schedule_pending) : (view.pending_jobs && !view.test_pending ? ('队列 pending：' + view.pending_jobs) : ''),
+      view.active_schedule ? ('定时处理中：' + view.active_schedule) : '',
+      view.schedule_pending > (view.active_schedule || 0)
+        ? ('定时待发：' + (view.schedule_pending - (view.active_schedule || 0)))
+        : (view.pending_jobs && !view.test_pending && !view.active_schedule ? ('队列 pending：' + view.pending_jobs) : ''),
       !paused && view.schedule_next_count != null ? ('下一批最多：' + view.schedule_next_count + ' 人') : '',
       view.schedule_note || '',
     ].filter(Boolean).join(' · ');
@@ -777,8 +783,17 @@ el('connect').onclick = async () => {
     if (!ensured.ok) {
       throw Error('本机队列未能自动启动：' + (ensured.error || '') + '。' + (ensured.hint || ''));
     }
-    const old = await chrome.storage.local.get(['config', 'current', 'client_id']);
-    if (old.current) throw Error('当前有未完成邮件，先核查回执再切换或重连');
+    let old = await chrome.storage.local.get(['config', 'current', 'client_id']);
+    if (old.current) {
+      showToast('正在恢复上次未完成的邮件任务…', 'info', 12000);
+      try { await chrome.runtime.sendMessage({type: 'wake'}); } catch {}
+      for (let i = 0; i < 24 && old.current; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        old = await chrome.storage.local.get(['config', 'current', 'client_id']);
+      }
+      if (old.current)
+        throw Error('上次邮件尚待 Gmail 已发记录核对；当前任务不会重复发送。请保持该账号 Gmail 页签可用。');
+    }
     const {settings, queueNote} = await saveSettings({requireQueue: true});
     const response = await fetch(ORIGIN + '/api/browser-mail/extension-bootstrap', {
       method: 'POST',

@@ -5,6 +5,8 @@ import {captureReplyEvents, flushReplyEvents} from './reply-relay.mjs';
 import {ensureGmailAccountTabs} from './gmail-tabs.mjs';
 import {withReplyDetailTab, cleanupReplyDetailTab} from './reply-detail-tab.mjs';
 import {newReplyBodyCandidates, markReplyBodyRead} from './reply-body-baseline.mjs';
+import {mayReloadBeforeCompose} from './send-stall.mjs';
+import {pausedPreSendReceipt} from './pause-recovery.mjs';
 
 const NATIVE_HOST = 'com.tk.outreach.sendqueue';
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
@@ -389,9 +391,7 @@ async function watchStall(current) {
   }
   const stuck = Date.now() - (current.watchSince || Date.now());
   // 草稿已生成 / 已点发送：绝不刷新（会丢草稿或重复发送），只能切前台。
-  const noReload = ['prepared', 'permit_requested', 'click_authorized', 'clicked', 'searching', 'uncertain']
-    .includes(current.phase);
-  if (!noReload && stuck > STALL_RELOAD_MS && (current.stallReloads || 0) < 2) {
+  if (mayReloadBeforeCompose(current) && stuck > STALL_RELOAD_MS && (current.stallReloads || 0) < 2) {
     current.stallReloads = (current.stallReloads || 0) + 1;
     current.stage = '后台无进展，刷新 Gmail 标签页（第 ' + current.stallReloads + ' 次）';
     current.accountReady = false;
@@ -703,7 +703,32 @@ async function tick() {
       config = stored.config || config;
       current = stored.current;
     }
-    if (!config?.enabled || !config.token) return;
+    if (!config?.enabled || !config.token) {
+      const pausedReceipt = pausedPreSendReceipt(current, config);
+      if (pausedReceipt) {
+        current.receipt = pausedReceipt;
+        await save(current);
+        await finish(config, current);
+      } else if (current && config?.token && needsReconciliation(current.phase)) {
+        try {
+          if (await ownTab(current, true)) {
+            const receipt = await page(current, 'receipt');
+            if (receiptMatches(current.job, receipt)) {
+              current.receipt = receipt;
+              await save(current);
+              await finish(config, current);
+            } else {
+              await chrome.storage.local.set({lastError: {at: Date.now(),
+                message: '已暂停；上次邮件可能已点击发送，正在 Gmail 已发记录核对，暂不重复发送'}});
+            }
+          }
+        } catch (error) {
+          await chrome.storage.local.set({lastError: {at: Date.now(),
+            message: '暂停期间核对 Gmail 已发记录失败：' + (error.message || error)}});
+        }
+      }
+      return;
+    }
     if (!current) {
       const slots = await listGmailSlots();
       if (!slots.length) {

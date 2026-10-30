@@ -305,7 +305,21 @@ export async function gmailPage(action,job){
     if(job.gmail_template_name){
       if(!compose.dataset.gmwTemplateRequested){
         const items=[...document.querySelectorAll('[role="menuitem"]')].filter(visible);
-        const names=items.filter(e=>text(e)===job.gmail_template_name);
+        const normalize=s=>String(s||'').replace(/\s+/g,' ').trim();
+        const requested=normalize(job.gmail_template_name);
+        const labels=e=>[
+          text(e), e.getAttribute('title'), e.getAttribute('aria-label'),
+          e.getAttribute('data-tooltip'),
+          ...[...e.querySelectorAll('[title],[aria-label]')].flatMap(child=>[
+            child.getAttribute('title'),child.getAttribute('aria-label')]),
+        ].map(normalize).filter(Boolean);
+        const exact=items.filter(e=>labels(e).includes(requested));
+        const shortened=exact.length?[]:items.filter(e=>labels(e).some(label=>{
+          const match=label.match(/^(.*?)(?:\.\.\.|…)$/);
+          const prefix=match?.[1]?.trim()||'';
+          return prefix.length>=12&&requested.startsWith(prefix);
+        }));
+        const names=exact.length?exact:shortened;
         if(names.length>1)return {error:'ambiguous_saved_template'};
         let target=names[0],step='choose';
         if(!target){target=items.find(e=>/^(模板|Templates)(?:\s*[►▶▸›])?$/i.test(text(e)));step='templates';}
